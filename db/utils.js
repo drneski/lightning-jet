@@ -682,7 +682,15 @@ module.exports = {
     let avoid;
     db.serialize(function() {
       let q = 'SELECT * FROM ' + REBALANCE_AVOID_TABLE;
-      q += ' WHERE from_node="' + from + '" AND to_node="' + to + '" AND max_ppm=' + maxPpm;
+      // An entry learned under a budget at least as loose as this one still
+      // applies: a node that was too expensive with more room to spend cannot
+      // fit with less. An exact match on max_ppm made a run at a different ppm
+      // relearn everything from scratch.
+      //
+      // Entries deliberately stay scoped to their route. A node's fee is set per
+      // channel, so one expensive edge says nothing about its others, and
+      // excluding the node on every route would throw away its cheap channels.
+      q += ' WHERE from_node="' + from + '" AND to_node="' + to + '" AND max_ppm >= ' + Number(maxPpm);
       q += ' AND date > ' + (Date.now() - mins * 60 * 1000);
       let list = [];
       db.each(q, function(err, row) {
