@@ -12,7 +12,8 @@ should land instead.
 ## 1. `constructInsertString` builds SQL without escaping
 
 **Severity:** high — silent data loss
-**Where it belongs:** its own branch, e.g. `fix/db-sql-escaping`
+**Where it belongs:** 1.7.1, on its own branch, e.g. `fix/db-sql-escaping`. Kept
+out of 1.7.0 because it pre-dates that release and touches every insert.
 **Why not on the baseline branch:** pre-dates the delta; `db/utils.js:962` is
 unchanged since before `main`.
 
@@ -72,9 +73,11 @@ intentionally unlinted legacy layer and should be costed separately.
 
 ## 2. Documented Node version does not match what the code needs — RESOLVED
 
-**Resolved** on `chore/runtime-modernization`, together with the `engines`
-bump, so the two agree. `README.md:27` now says 22.x+ to match
-`engines: { node: ">=22" }` and `.nvmrc`. Retained below for context.
+**Resolved** in two steps. `chore/runtime-modernization` brought `README.md:27`
+to 22.x+, matching `engines: { node: ">=22" }` and `.nvmrc`. That was marked
+resolved too early: line 30 still installed Node 16 via `setup_16.x`, and line 36
+still told users to keep npm at 8.x. Both are fixed for 1.7.0.
+Retained below for context.
 
 **Severity:** high — new users hit it on first run
 
@@ -226,7 +229,10 @@ Stale, safe to drop.
 
 ---
 
-## 10. `tools/genconfig` still writes the pre-umbrel-0.5 macaroon paths
+## 10. `tools/genconfig` still writes the pre-umbrel-0.5 macaroon paths — RESOLVED
+
+**Resolved** for 1.7.0: `tools/genconfig` now writes the same `app-data/lightning`
+paths as `docker/genconfig.sh` and the README.
 
 **Severity:** high — every fresh host install starts broken
 **Where it belongs:** its own branch, small
@@ -304,7 +310,7 @@ in `CLAUDE.md`.
 
 ---
 
-## 13. `describegraph.json` is not gitignored
+## 13. `describegraph.json` is not gitignored — RESOLVED
 
 **Severity:** trivial
 **Where it belongs:** opportunistic, one line
@@ -315,3 +321,147 @@ is easy to commit by accident.
 
 Not produced by the new CLI surface tests — those leave the tree clean. Adding
 `describegraph.json` to `.gitignore` is the whole fix.
+
+**Resolved** for 1.7.0. The same change ignores the `jet-snapshot.db` and
+`jet-recovered.db` copies pulled from the node for analysis.
+
+---
+
+## 14. Persist hop-level skips across rebalance runs
+
+**Severity:** medium — wasted probes and coarse exclusions
+**Where it belongs:** Jet 2.0
+
+`skipHop` and `isSkippedHop` (`api/rebalance.js:590`) record the directed edges
+jet learns to avoid, `node → next_node`, passed to bos as
+`--avoid "FEE_RATE>N/next_node"`. They live in memory and are discarded when the
+run ends, while the cruder whole-node exclusions persist in `rebalance_avoid`.
+That is backwards: the edge is the more precise fact.
+
+Fees are set per channel and direction. On the umbrel node MasterYoda charged
+47 ppm on some routes and 1,218 on others for the same first hop, so excluding a
+whole node to avoid one expensive edge discards its cheap ones. That is also why
+1.7.0 widens the avoid lookup across budgets (`max_ppm >= budget`) but not across
+routes.
+
+The observed per-node fee is already recorded: `liquidity` holds it for 88 of 90
+avoid entries, written by the same run. Edge persistence needs the edge, not a
+new fee column.
+
+Related: aggressive mode (`maxRuntime < 60`, which the default `maxTime: 30`
+always selects) writes a within-run speed heuristic to the table, where it is
+reused for 150 minutes. Persisted edges should record whether an entry was
+speculative.
+
+Kept out of 1.x because it changes exclusion behavior, and Jet 1.x is one of the
+baselines Lightning Foundry's M3 measures.
+
+---
+
+## 15. Separate read and write LND credentials
+
+**Severity:** required for managed mode; none standalone
+**Where it belongs:** Jet 2.0
+
+`api/connect.js`, `api/router-rpc.js` and `bos/connect.js` all load the one
+`config.macaroonPath`. Lightning Foundry's managed mode needs two: a write
+macaroon carrying a custom caveat, so that LND hands every payment and fee change
+to Foundry's Policy before running it, and a read-only macaroon without the
+caveat, so reads skip the middleware. bos executes the payments, so its handle
+takes the write macaroon. With one path configured, jet keeps today's standalone
+behavior.
+
+See `lightningfoundry/docs/integrations/lightning-jet.md`.
+
+---
+
+## 16. Meet Lightning Foundry's invariants 1, 3 and 4
+
+**Severity:** gates Jet 2.0 running as part of a Foundry node
+**Where it belongs:** Jet 2.0
+
+Invariant 1 requires pinned, hashed dependencies with no install scripts; 3, no
+network path beyond LND; 4, verified release artifacts. Measured on `dev` on
+2026-10-04, with dev dependencies included in the tree counts:
+
+- **Dependencies float.** 11 of 13 direct dependencies use `^` or `~`.
+- **Four packages run install scripts, not two.** `deasync` (`node ./build.js`),
+  `sqlite3` (`prebuild-install -r napi || node-gyp rebuild`), `protobufjs`
+  (postinstall, pulled in by `@grpc/proto-loader`), and jet's own
+  `postinstall: ./tools/genconfig`.
+- **balanceofsatoshis is the largest item, and the Foundry spec does not list
+  it.** Its closure is 206 of 437 installed packages (47%), and 160 (37%) are
+  there only because of it. It executes every rebalance, so removing it means
+  driving LND's router RPC directly: route queries, probing, `SendToRouteV2`. Jet
+  already has a router client in `api/router-rpc.js`.
+- **sqlite3 can be removed.** `node:sqlite` works here on Node 23.10 without a
+  flag and should on the node's 22.23, but verify there; it is still marked
+  experimental. Its `DatabaseSync` is synchronous, so the db layer would no longer
+  need `deasync` either.
+- **deasync** then remains only in the `lnd-api/utils.js` gRPC wrappers;
+  converting those to async removes it.
+- **Telegram** is the only outbound network path in jet's own code; the other
+  URLs are help text. It becomes a separate notifier that holds no credential,
+  which the spec allows. bos needs its own invariant-3 audit.
+- **genconfig** becomes an explicit `jet init` rather than an install hook.
+- **Releases** publish versions, hashes and signatures.
+
+---
+
+## 17. No ceiling on total rebalance fees per day — RESOLVED
+
+**Resolved** for 1.7.0 with `rebalancer.maxDailyFee`, default 100,000 sats per
+rolling 24 hours, 0 to disable. The rebalancer checks it before spawning each
+automated rebalance, counting fees paid (manual included) plus the full fee limit
+of runs still within their time limit; `db.rebalanceFeesCommittedSync` does the
+accounting. On the umbrel node's history the default would have bound on 5 of 549
+days with rebalancing; the busiest day spent 200,344 sats.
+
+**Severity:** high — an unbounded loop that spends money
+**Where it belongs:** 1.7.0
+
+The only fee bound is per rebalance: `maxFee = amount × ppm / 1e6`
+(`api/rebalance.js:97`). The rebalancer loops every two minutes with up to
+`maxInstances` runs at once, and nothing caps what it spends in a day.
+
+Lightning Foundry's threat model relies on that bound. A peer that can predict
+rebalances can provoke them and collect the fees, and in standalone mode "Jet's
+own limit is the only bound". Today there is no such limit. Add a deterministic
+daily ceiling, checked before each rebalance starts against fees already paid per
+`rebalance_history`, with a default high enough not to bind in normal operation.
+
+---
+
+## 18. Child processes find `node` on PATH — RESOLVED
+
+**Resolved** for 1.7.0: both spawn sites use `process.execPath`.
+
+**Severity:** medium — latent crash since the Node 22 migration
+**Where it belongs:** 1.7.0
+
+`service/utils.js:43` starts every daemon with `cmd: 'node'`, and
+`service/rebalancer.js:562` executes the `jet` script, whose
+`#!/usr/bin/env node` shebang also searches PATH. Started from a context where nvm
+is not initialized, such as cron, systemd or non-interactive SSH, children get the
+system Node (`/usr/bin/node` v16 on the umbrel host) and crash loading native
+modules built for 22. Use `process.execPath` in both places so children run on the
+parent's binary.
+
+---
+
+## 19. Rebalance avoid-list messages and retries
+
+**Severity:** low
+**Where it belongs:** 1.7.1. Cut from 1.7.0 to keep that release small.
+
+Found while measuring rebalances on the umbrel node in September 2026:
+
+- **Misleading message.** When the only route is two hops between the run's own
+  endpoints (MasterYoda → Kraken at 1,048 ppm), `canAvoidNode` rightly refuses to
+  exclude either, and jet logs "couldnt exclude any nodes, likely already on the
+  avoid list". Nothing was on the avoid list; the route had no excludable node.
+- **Futile retry.** In that case the next probe is guaranteed identical, so jet
+  should stop instead of retrying. A failed probe spends nothing, so this costs
+  only time.
+
+Silent failures when inserting avoid entries are item 3.
