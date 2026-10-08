@@ -38,9 +38,11 @@ class Service {
     }
     if (this.isDisabled()) return console.log('service is disabled');
 
-    // spawn the process
+    // spawn the process with the binary this one runs on; a bare `node` searches
+    // PATH, which outside a login shell can find an older system node that the
+    // native modules weren't built for
     const p = {
-      cmd: 'node',
+      cmd: process.execPath,
       arg: [ this.path() ],
       log: this.log
     }

@@ -556,11 +556,13 @@ function processQueueImpl() {
     let item = queue.pop();
     if (!item) break;
     logger.debug('rebalancing queue: processing', JSON.stringify(item, null, 2));
-    
-    // spawn the process
+
+    // Spawn with the binary this process runs on. The script's
+    // `#!/usr/bin/env node` would search PATH, which outside a login shell
+    // can find an older system node that the native modules weren't built for.
     const sarg = {
-      cmd: jetExecPath,
-      arg: ['--from', item.from, '--to', item.to, '--amount', item.amount, '--ppm', item.maxPpm, '--type', '"' + item.type + '"'],
+      cmd: process.execPath,
+      arg: [jetExecPath, '--from', item.from, '--to', item.to, '--amount', item.amount, '--ppm', item.maxPpm, '--type', '"' + item.type + '"'],
       log: '/tmp/rebalance_' + normalizeName(item.fromName) + '_' + normalizeName(item.toName) + '.log'
     }
     logger.debug('rebalancing queue: spawn process:', JSON.stringify(sarg, null, 2));
