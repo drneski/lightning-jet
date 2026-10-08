@@ -19,6 +19,7 @@ const data =
     "maxAutoPpm": 500,\n\
     "maxInstances": 10,\n\
     "maxPendingHtlcs": 4,\n\
+    "maxDailyFee": 100000,\n\
     "enforceMaxPpm": false,\n\
     "exclude": [\n\
     ]\n\

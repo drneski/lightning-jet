@@ -915,6 +915,22 @@ module.exports = {
     closeHandle(db);
     return res;
   },
+  // Fees committed to rebalancing within the last `secs` seconds: fees paid by
+  // rebalances that moved liquidity, plus the most that rebalances still within
+  // their time limit may spend. A running rebalance counts at its full fee limit
+  // even after recording part of its spend, so the total can run high while one
+  // is in flight; this backs a cap, where high stops rebalancing early rather
+  // than late. Rows past their time limit are ignored, so a run that died
+  // without removing its row cannot hold budget indefinitely.
+  rebalanceFeesCommittedSync(secs = 24 * 60 * 60) {
+    const now = Date.now();
+    const paid = module.exports.listRebalancesSync(secs, 1)
+      .reduce((sum, r) => sum + (r.rebalanced || 0) * (r.ppm || 0) / 1000000, 0);
+    const running = module.exports.listActiveRebalancesSync()
+      .filter(r => r.date + (r.mins || 0) * 60 * 1000 > now)
+      .reduce((sum, r) => sum + (r.amount || 0) * (r.ppm || 0) / 1000000, 0);
+    return Math.ceil(paid + running);
+  },
   enableTestMode() {
     logger.log('test mode enabled');
     testMode = true;

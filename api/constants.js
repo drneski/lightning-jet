@@ -32,6 +32,7 @@ exports.rebalancer = {
   maxAutoPpm: 500, // for automated rebalance
   maxInstances: 10, // max rebalancer instances
   maxPendingHtlcs: 4,
+  maxDailyFee: 100000, // sats automated rebalances may spend per rolling 24 hours; 0 disables
   minBuffer: 20,  // sats
   buffer: 250, // sats
   minCapacity: 990000  // sats

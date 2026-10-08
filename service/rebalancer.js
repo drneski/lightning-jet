@@ -30,6 +30,7 @@ const {htlcHistorySync} = require('../lnd-api/utils');
 const {classifyPeersSync} = require('../api/utils');
 const {listActiveRebalancesSync} = require('../api/utils');
 const {listRebalancesSync} = require('../db/utils');
+const {rebalanceFeesCommittedSync} = require('../db/utils');
 const {listFeesSync} = require('../lnd-api/utils');
 const {analyzeFees} = require('../api/analyze-fees');
 const {removeEmojis} = require('../lnd-api/utils');
@@ -48,6 +49,8 @@ logger.log('rebalancer is starting up');
 const maxCount = config.rebalancer.maxInstances || constants.rebalancer.maxInstances;
 const defaultMaxPpm = config.rebalancer.maxAutoPpm || constants.rebalancer.maxAutoPpm;
 const maxPendingHtlcs = config.rebalancer.maxPendingHtlcs || constants.rebalancer.maxPendingHtlcs;
+// `??` rather than `||` so that an explicit 0, which disables the cap, is kept
+const maxDailyFee = config.rebalancer.maxDailyFee ?? constants.rebalancer.maxDailyFee;
 const historyDepth = 2 * 60 * 60; // secs
 const minToRebalance = 50000; // min liquidity to rebalance
 const minLocal = 1000000; // min local liquidity for balanced peers
@@ -547,15 +550,47 @@ function processQueue() {
   }
 }
 
+// when the daily fee cap was last reported; the queue is processed every few
+// seconds and refilled every loop, so report at most once per cap window
+let feeCapReportedAt = 0;
+
 function processQueueImpl() {
   const normalizeName = name => {
     return removeEmojis(name).replace(constants.logNameRegEx, "").substring(0, 15); // hardcoded???
   }
 
+  let committed;  // fees committed in the last 24 hours, read once per pass
+
   while(true) {
     let item = queue.pop();
     if (!item) break;
     logger.debug('rebalancing queue: processing', JSON.stringify(item, null, 2));
+
+    // Daily fee cap. A peer that can predict rebalances can provoke them to
+    // collect the fees, and the per-rebalance ppm limit does nothing to bound
+    // how many run in a day. Each rebalance counts at the most it may spend.
+    if (maxDailyFee > 0) {
+      if (committed === undefined) committed = rebalanceFeesCommittedSync();
+      const maxFee = Number(item.amount) * Number(item.maxPpm) / 1000000;
+      // fail closed: NaN compares false, which would let the rebalance through
+      // and leave the cap off for the rest of the pass
+      if (!Number.isFinite(committed) || !Number.isFinite(maxFee)) {
+        logger.warn('daily fee cap: cannot compute fees for', item.fromName, 'to', item.toName, '- skipping');
+        continue;
+      }
+      if (committed + maxFee > maxDailyFee) {
+        logger.debug('daily fee cap: skipping', item.fromName, 'to', item.toName);
+        if (Date.now() - feeCapReportedAt > 24 * 60 * 60 * 1000) {
+          feeCapReportedAt = Date.now();
+          const msg = 'daily rebalance fee cap of ' + maxDailyFee + ' sats reached, ' +
+            Math.round(committed) + ' sats committed in the last 24 hours; skipping rebalances until it frees up';
+          logger.warn(msg);
+          sendMessage('rebalancer: ' + msg);
+        }
+        continue;
+      }
+      committed += maxFee;
+    }
 
     // Spawn with the binary this process runs on. The script's
     // `#!/usr/bin/env node` would search PATH, which outside a login shell
