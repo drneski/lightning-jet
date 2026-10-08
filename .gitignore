@@ -4,3 +4,8 @@ jet.db
 node_modules
 sftp-config.json
 node-configs
+
+# local db snapshots pulled from the node for analysis
+jet-snapshot.db
+jet-recovered.db
+describegraph.json
