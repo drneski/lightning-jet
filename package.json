@@ -52,7 +52,7 @@
     "lint:errors": "eslint jet cli/**/*.js service/**/*.js --quiet",
     "check": "npm run check:cli && npm run test:cli-surface && npm run lint:errors"
   },
-  "version": "1.6.0",
+  "version": "1.7.0",
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "eslint": "^9.39.4",
