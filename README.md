@@ -27,15 +27,15 @@ Jet can be installed in [Ubuntu VM](#ubuntu-vm) on Windows, Mac OS, and other pl
 Make sure to [install node](https://nodejs.org/en/download/) if you don't have it already. Run `node -v` to check if you have `node` and whether it is up to date (version 22.x+). Update `node` in case of an old version (this will also update `npm`).
 
 ```bash
-curl -sL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+curl -sL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
 > The above command updates node binaries. Alternatively, you can [download an installable](https://nodejs.org/en/download/) for your platform.
 
-Make sure `npm` is up to date (version 8.x) by running `npm -v`. Update `npm` in case of an old version; refer to `node` update steps above.
+`npm` ships with `node`, so the step above already installs a matching version. Check it with `npm -v`. Do not install or upgrade `npm` on its own — a separately installed copy can shadow the bundled one and leave you running a mismatched pair.
 
-> You may run into an issue of having multiple copies of `npm` installed if you update `npm` separately from `node`. Re-run `npm -v` after the update to ensure that your path is picking the update version. You can locate multiple copies by `find / -name npm 2> /dev/null`; identify the right copy of `npm` and update `PATH` in `~/.profile` accordingly.
+> If an earlier setup installed `npm` separately, or set a custom `prefix`, you can end up with multiple copies and run one that does not match `node`. Confirm which copy your path picks up with `npm -v` and `which npm`. You can locate other copies with `find / -name npm 2> /dev/null`, and check for a custom prefix with `npm config get prefix`; then update `PATH` in `~/.profile` accordingly. Note that a custom `prefix` is also incompatible with `nvm`.
 
 ## Installation
 
