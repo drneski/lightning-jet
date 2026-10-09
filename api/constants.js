@@ -38,11 +38,6 @@ exports.rebalancer = {
   minCapacity: 990000  // sats
 }
 
-// lnd api
-exports.lnd = {
-  timeLockDelta: 40
-}
-
 // fee analysis
 exports.feeAnalysis = {
   normal: 'normal',

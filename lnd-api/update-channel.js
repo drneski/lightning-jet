@@ -1,5 +1,4 @@
 const deasync = require('deasync');
-const constants = require('../api/constants');
 const {getInfoSync} = require('../lnd-api/utils');
 
 const toBytes = id => Buffer.from(id, 'hex').reverse();
@@ -8,7 +7,7 @@ module.exports = {
   // returns true if successful, throws an error otherwise
   updateChannelSync: function(lndClient, req) {
     if (!req.chan) throw new Error('channel is missing');
-    if (!req.base && !req.ppm) throw new Error('either base or ppm need to be provided');
+    if (req.base === undefined && req.ppm === undefined) throw new Error('either base or ppm need to be provided');
 
     // get channel info
     let chan, error, done;
@@ -28,24 +27,24 @@ module.exports = {
       throw new Error('error getting node info: ' + err.toString());
     }
 
-    // there is a weird bug in https://api.lightning.community/#updatechannelpolicy
-    // if i don't pass the base fee, it'll zero it out. to workaround, the code
-    // will fetch & pass the current base fee (if none specified). this is so that
-    // the base fee wont be zeroed out.
-    let reqBase = req.base;
-    if (!reqBase) {
-      if (nodeInfo.identity_pubkey === chan.node1_pub) reqBase = chan.node1_policy.fee_base_msat;
-      else reqBase = chan.node2_policy.fee_base_msat;
-    }
+    // updatechannelpolicy sets the whole policy: base fee, fee rate and time lock
+    // delta that aren't passed are zeroed out (or set to whatever is passed),
+    // not kept. carry over the channel's current values for anything the caller
+    // didn't ask to change, so that e.g. setting the base fee doesn't zero the ppm.
+    let policy = (nodeInfo.identity_pubkey === chan.node1_pub) ? chan.node1_policy : chan.node2_policy;
+    if (!policy) throw new Error('current policy for the channel is unknown, try again later');
 
     let tokens = chan.chan_point.split(':');
-    let cpoint = { 
+    let cpoint = {
       funding_txid_str: tokens[0],
       output_index: parseInt(tokens[1]),
     };
-    let grpc = { chan_point: cpoint, time_lock_delta: constants.lnd.timeLockDelta };
-    if (reqBase) grpc.base_fee_msat = reqBase
-    if (req.ppm) grpc.fee_rate = req.ppm / 1000000;
+    let grpc = {
+      chan_point: cpoint,
+      base_fee_msat: (req.base !== undefined) ? req.base : policy.fee_base_msat,
+      fee_rate: ((req.ppm !== undefined) ? req.ppm : Number(policy.fee_rate_milli_msat)) / 1000000,
+      time_lock_delta: policy.time_lock_delta
+    };
     //console.log(grpc);
 
     done = false;
