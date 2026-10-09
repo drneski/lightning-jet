@@ -6,7 +6,8 @@ RUN apk update \
   make \
   gcc \
   g++ \
-  python3
+  python3 \
+  py3-setuptools
 
 WORKDIR /app/
 
