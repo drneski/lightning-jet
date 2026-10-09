@@ -465,3 +465,32 @@ Found while measuring rebalances on the umbrel node in September 2026:
   only time.
 
 Silent failures when inserting avoid entries are item 3.
+
+---
+
+## 20. Services are found by process name across the whole host
+
+**Severity:** medium, for anyone running two installs side by side
+**Where it belongs:** Jet 2.0
+
+Found while planning 1.7.0 testing from a second checkout next to prod, with a
+copy of prod's `jet.db`. The data is separate, but nothing else is:
+
+- **Process lookup.** `isServiceRunning`, `stopServiceExec` (`service/utils.js`)
+  and `isRunningSync` (`api/utils.js`) match `find-process` by name, e.g.
+  `rebalancer.js`, regardless of install folder. `jet status` in one install reports
+  the other's daemons. `jet stop` kills the first match, which may be the other
+  install's process. `jet start rebalancer` exits as already running.
+- **Launcher cross-kill.** A second `daddy` sees the other install's rebalancer
+  running, reads its heartbeat from its own db, finds it stale, and restarts it:
+  killing the other install's process and starting its own. Both launchers then
+  repeat this against each other.
+- **Shared paths and bot.** Logs go to fixed `/tmp/jet-<service>.log` and
+  `/tmp/rebalance_<from>_<to>.log`. A copied `config.json` carries the same
+  Telegram token, so two `telegram` services poll one bot and conflict.
+- **Separate fee caps.** `rebalancer.maxDailyFee` counts only its own db, so
+  two installs on one LND can together spend twice the cap.
+
+Until then, test a second install's services only while prod's are stopped. Fix by
+scoping each install with a pid file or a per-install marker in the spawned
+command line, and per-install log paths.
