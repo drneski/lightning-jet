@@ -494,3 +494,57 @@ copy of prod's `jet.db`. The data is separate, but nothing else is:
 Until then, test a second install's services only while prod's are stopped. Fix by
 scoping each install with a pid file or a per-install marker in the spawned
 command line, and per-install log paths.
+
+---
+
+## 21. Readers and writers of `jet.db` block each other
+
+**Severity:** medium
+**Where it belongs:** Jet 2.0, with item 3
+
+`jet.db` uses SQLite's default rollback journal (`journal_mode=delete`), and
+`db/utils.js` never sets a busy timeout. Every read or write therefore fails at
+once with "database is locked" whenever another process holds the file. That
+includes jet's own services, which all write to the same file, and anyone taking a
+snapshot with the `sqlite3` CLI while the logger runs. The `doIt()` retries
+cover only some calls, and item 3 explains why even those miss async errors, so
+a collision can silently drop a write.
+
+Fix by switching to WAL (`PRAGMA journal_mode=WAL`, persistent in the file), so
+readers never block the writer, and setting `PRAGMA busy_timeout` on every
+connection.
+
+---
+
+## 22. Critical advisories that need major upgrades
+
+**Severity:** medium — security debt
+**Where it belongs:** Jet 2.0
+
+`npm audit --omit=dev` on 1.7.0 reports 41 advisories, 4 critical (1.6.0 had
+62, 9 critical). Item 11 covers `form-data` and `request`, which come in through
+`node-telegram-bot-api`. The other two:
+
+- **`tar`**, via `sqlite3` 5.x. The fix is `sqlite3` 6, a major upgrade. It is
+  used at install time, not by jet's code.
+- **`proxy-addr`**, via `balanceofsatoshis` → `goldengate` → `express`. A patch
+  exists, but `npm audit fix` would change 76 packages to apply it. Jet runs no
+  HTTP server, so the IP-spoofing issue is not reachable from jet.
+
+Both go away with item 16: `node:sqlite` replaces `sqlite3`, and dropping `bos`
+removes `goldengate` and `express`.
+
+---
+
+## 23. The Docker install is not tested end to end
+
+**Severity:** low
+**Where it belongs:** Jet 2.0, or drop it in favour of Foundry's packaging
+
+1.7.0 fixes the image build (#107) and the generated config: an April 2025
+change had pointed the container's config at the host's Umbrel 0.5 paths, while
+`docker-compose.yml` always mounts LND at `/home/umbrel/umbrel/lnd` inside the
+container. Neither change could be tested, because no Docker host was
+available. The `LND_IP_ADDRESS` default (`10.21.21.9`) dates from Umbrel 0.4 and
+is likely stale. Build and run the image against a real node before relying on
+this path.
