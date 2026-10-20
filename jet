@@ -1,3 +1,13 @@
 #!/usr/bin/env node
 
+// Check the Node version before loading anything: under an older Node the
+// native modules (built for this one) fail with an error that looks like a
+// broken install rather than the wrong Node.
+const major = Number(process.versions.node.split('.')[0]);
+if (major < 22) {
+  console.error('jet needs Node 22 or later, but is running on Node ' + process.version + ' (' + process.execPath + ').');
+  console.error('Switch to Node 22 (for example `nvm use 22`) and run the command again.');
+  process.exit(1);
+}
+
 require('./cli');
