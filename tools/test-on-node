@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+#
+# Installs jet on a node in a throwaway folder, over ssh, and checks that it
+# builds, loads its native modules and passes `npm run check`. Optionally builds
+# the Docker image the same way.
+#
+# It never talks to LND, never starts, stops or restarts a service, and never
+# rebalances: the copy's config is pointed at nonexistent credentials. The
+# folder, and any image or base image it pulled, are removed when it finishes.
+#
+# usage: tools/test-on-node <ssh-host> [--ref <branch|tag>] [--node <version>] [--docker]
+#
+#   <ssh-host>   a host from ~/.ssh/config, e.g. umbrel
+#   --ref        install this ref from GitHub instead of the local working tree
+#   --node       Node version to select with nvm on the node (default 22)
+#   --docker     also build docker/Dockerfile and run `jet -v` in the image
+#
+# Without --ref, it ships the local working tree (tracked and untracked files,
+# minus anything .gitignore excludes), so uncommitted changes are tested too.
+#
+# The test runs detached on the node and this script polls its output, so a
+# dropped connection (common over Tor) neither stops it nor loses the result.
+
+set -euo pipefail
+
+usage() { sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+host=""; ref=""; node="22"; docker=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ref) ref="${2:?--ref needs a value}"; shift 2 ;;
+    --node) node="${2:?--node needs a value}"; shift 2 ;;
+    --docker) docker=1; shift ;;
+    -h|--help) usage ;;
+    -*) echo "unknown option: $1" >&2; usage ;;
+    *) [ -z "$host" ] || usage; host="$1"; shift ;;
+  esac
+done
+[ -n "$host" ] || usage
+
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+remote_url="https://github.com/drneski/lightning-jet.git"
+dir="jet-test-$(date +%s)"
+ssh_opts=(-o BatchMode=yes -o ConnectTimeout=60 -o ServerAliveInterval=20 -o ServerAliveCountMax=6)
+remote() { ssh "${ssh_opts[@]}" "$host" "$@"; }
+
+if [ -n "$ref" ]; then
+  echo "testing $ref from $remote_url on $host"
+  remote "git clone -q --depth 1 -b '$ref' '$remote_url' ~/'$dir'"
+else
+  echo "testing the local working tree ($(git -C "$repo" rev-parse --short HEAD), plus uncommitted changes) on $host"
+  (cd "$repo" && git ls-files -z -c -o --exclude-standard | COPYFILE_DISABLE=1 tar --null -T - -cz) \
+    | remote "mkdir -p ~/'$dir' && tar -xz -C ~/'$dir' 2>/dev/null"
+fi
+
+# the test itself, run on the node; its last line is DONE
+{ printf 'DIR=~/%q NODE=%q DOCKER=%q\n' "$dir" "$node" "$docker"; cat <<'REMOTE'
+set -u
+status=0
+fail() { echo "FAIL: $*"; status=1; }
+cleanup() {
+  rm -rf "$DIR" "$DIR.log"
+  [ -n "${image:-}" ] && docker rmi -f "$image" >/dev/null 2>&1
+  [ -n "${base_pulled:-}" ] && docker rmi "$base_pulled" >/dev/null 2>&1
+  echo "removed the test folder${image:+, image}${base_pulled:+ and pulled base image $base_pulled}"
+  echo DONE
+}
+trap cleanup EXIT
+
+if [ -s ~/.nvm/nvm.sh ]; then
+  . ~/.nvm/nvm.sh >/dev/null
+  nvm use "$NODE" >/dev/null || { echo "FAIL: nvm has no Node $NODE"; exit 1; }
+fi
+cd "$DIR"
+echo "node $(node -v), npm $(npm -v), $(python3 -V 2>&1), $(uname -m), $(. /etc/os-release && echo "$PRETTY_NAME")"
+
+if npm ci --foreground-scripts --no-audit --no-fund > "$DIR.log" 2>&1; then
+  echo "ok: npm ci ($(grep -o 'using node-gyp@[0-9.]*' "$DIR.log" | sort -u | tr '\n' ' '))"
+  # postinstall writes a default config whose paths, on an umbrel, are the real
+  # LND credentials. Point them nowhere so the checks below cannot reach LND;
+  # they are written to pass without a live node.
+  node -e '
+    const f = "api/config.json", c = JSON.parse(require("fs").readFileSync(f));
+    c.macaroonPath = "/nonexistent/admin.macaroon"; c.tlsCertPath = "/nonexistent/tls.cert";
+    delete c.serverAddress; delete c.telegramToken;
+    require("fs").writeFileSync(f, JSON.stringify(c, null, 2));'
+  echo "ok: jet -v prints $(./jet -v)"
+  if node -e "require('deasync').sleep(1); new (require('sqlite3').Database)(':memory:').close()"; then
+    echo "ok: deasync and sqlite3 load"
+  else fail "native modules do not load"; fi
+  if npm run check > "$DIR.log" 2>&1; then echo "ok: npm run check"
+  else fail "npm run check"; tail -20 "$DIR.log"; fi
+else
+  fail "npm ci"; grep -E "ERR!|Error" "$DIR.log" | grep -v "gyp info" | head -20
+fi
+
+if [ "$DOCKER" = 1 ]; then
+  base=$(sed -n 's/^FROM //p' docker/Dockerfile | head -1)
+  docker image inspect "$base" >/dev/null 2>&1 || base_pulled="$base"
+  image="jet-test:$(basename "$DIR")"
+  echo "building the Docker image from $base (several minutes on a Raspberry Pi)"
+  if docker build -q -f docker/Dockerfile -t "$image" . > "$DIR.log" 2>&1; then
+    echo "ok: docker build"
+    if v=$(docker run --rm --entrypoint /app/jet "$image" -v 2>&1); then echo "ok: jet -v in the image prints $v"
+    else fail "jet -v in the image: $v"; fi
+    if docker run --rm --entrypoint node "$image" -e "require('deasync').sleep(1); new (require('sqlite3').Database)(':memory:').close()" >/dev/null 2>&1; then
+      echo "ok: deasync and sqlite3 load in the image ($(docker run --rm --entrypoint node "$image" -v))"
+    else fail "native modules do not load in the image"; fi
+  else
+    fail "docker build"; tail -20 "$DIR.log"
+  fi
+fi
+
+[ $status = 0 ] && echo "PASS" || echo "FAILED"
+exit $status
+REMOTE
+} | remote "cat > ~/'$dir.sh' && test -s ~/'$dir.sh' &&
+  { setsid nohup bash ~/'$dir.sh' > ~/'$dir.out' 2>&1 < /dev/null & echo \$! > ~/'$dir.pid'; }" \
+  || { echo "could not start the test on $host"; remote "rm -rf ~/'$dir' ~/'$dir.sh'" || true; exit 1; }
+# (the braces matter: a trailing & on the whole list would background cat too,
+# and a background job reads /dev/null instead of the script)
+
+# follow the output until the remote side prints DONE, or its process is gone
+shown=0; result=""; gone=0
+for _ in $(seq 1 180); do
+  sleep 10
+  out=$(remote "cat ~/'$dir.out' 2>/dev/null; kill -0 \$(cat ~/'$dir.pid') 2>/dev/null || echo __GONE__" 2>/dev/null) \
+    || { echo "(connection dropped, retrying)"; continue; }
+  lines=$(printf '%s\n' "$out" | grep -vx '__GONE__')
+  total=$(printf '%s\n' "$lines" | wc -l)
+  [ "$total" -gt "$shown" ] && printf '%s\n' "$lines" | sed -n "$((shown + 1)),\$p" | grep -vx 'DONE' || true
+  shown=$total
+  if printf '%s\n' "$lines" | grep -qx DONE; then
+    result=$(printf '%s\n' "$lines" | grep -xE 'PASS|FAILED' | tail -1)
+    break
+  fi
+  if printf '%s\n' "$out" | grep -qx '__GONE__'; then gone=1; break; fi
+done
+remote "rm -f ~/'$dir.sh' ~/'$dir.out' ~/'$dir.pid'" 2>/dev/null || true
+
+if [ "$gone" = 1 ]; then echo "the test stopped without finishing; check for ~/$dir on $host"; exit 1; fi
+if [ -z "$result" ]; then echo "gave up waiting after 30 minutes; ~/$dir may still be on $host"; exit 1; fi
+[ "$result" = PASS ]

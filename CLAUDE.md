@@ -15,6 +15,7 @@ npm run lint:errors          # eslint --quiet (errors only)
 npm run check:cli            # smoke-test: runs --help for every registered command
 npm run test:cli-surface     # golden-file snapshot of the CLI surface + README flag checks
 npm run check                # check:cli + test:cli-surface + lint:errors — run before considering CLI work done
+tools/test-on-node <ssh-host> [--ref <ref>] [--docker]   # install on a real node in a throwaway folder and run the checks there
 ```
 
 There is **no test framework**. Files under `test/` are standalone scripts run directly (`node test/fee-monitor.js`); many set `global.testModeOn = true` and/or `global.testDb` to avoid touching live LND/db. Some `test/` entries are directories of such scripts.
