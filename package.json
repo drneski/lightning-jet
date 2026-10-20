@@ -57,5 +57,13 @@
     "@eslint/js": "^9.39.4",
     "eslint": "^9.39.4",
     "globals": "^17.6.0"
+  },
+  "overrides": {
+    "node-gyp": "^11.5.0"
+  },
+  "allowScripts": {
+    "deasync@0.1.28": true,
+    "sqlite3@5.1.7": true,
+    "protobufjs": false
   }
 }

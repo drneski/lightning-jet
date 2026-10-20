@@ -33,6 +33,14 @@ sudo apt-get install -y nodejs
 
 > The above command updates node binaries. Alternatively, you can [download an installable](https://nodejs.org/en/download/) for your platform.
 
+Installing jet compiles a native module (`deasync`), which needs Python 3 and a C++ compiler. On Debian or Ubuntu, install them with:
+
+```bash
+sudo apt-get install -y build-essential python3
+```
+
+On macOS, run `xcode-select --install`.
+
 `npm` ships with `node`, so the step above already installs a matching version. Check it with `npm -v`. Do not install or upgrade `npm` on its own — a separately installed copy can shadow the bundled one and leave you running a mismatched pair.
 
 > If an earlier setup installed `npm` separately, or set a custom `prefix`, you can end up with multiple copies and run one that does not match `node`. Confirm which copy your path picks up with `npm -v` and `which npm`. You can locate other copies with `find / -name npm 2> /dev/null`, and check for a custom prefix with `npm config get prefix`; then update `PATH` in `~/.profile` accordingly. Note that a custom `prefix` is also incompatible with `nvm`.
@@ -184,7 +192,7 @@ Lightning Jet can be installed in Ubuntu VM on Windows, Mac OS, and other platfo
 
 3. Install curl: `sudo snap install curl`
 
-4. [Install node](https://github.com/nodesource/distributions/blob/master/README.md#using-ubuntu)
+4. [Install node](https://github.com/nodesource/distributions/blob/master/README.md#using-ubuntu), then the build tools: `sudo apt install -y build-essential python3`
 
 5. Install git: `sudo apt install git`
 
