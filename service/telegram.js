@@ -172,8 +172,18 @@ function pollMessagesExec() {
   }
 
   function sendMessageImpl(m) {
-    global.bot.sendMessage(chatId, m);
+    botSend(chatId, m);
   }
+}
+
+// The bot's sendMessage returns a promise that rejects on any failed send:
+// Telegram unreachable, rate limited, the bot blocked, no chat id yet, bad
+// HTML. Left unhandled, that reaches the process-wide handler in api/logger.js,
+// which exits, and the service would crash on the next send. Log it instead.
+function botSend(chatId, text, opts) {
+  if (!chatId || !global.bot) return;
+  global.bot.sendMessage(chatId, text, opts)
+    .catch(err => logger.error('telegram: could not send message:', err.message));
 }
 
 function initBot() {
@@ -195,7 +205,7 @@ function initBot() {
     const help = 'Welcome to the Lightning Jet telegram bot!';
 
     // send back the matched "whatever" to the chat
-    global.bot.sendMessage(chatId, help);
+    botSend(chatId, help);
   })
 
   global.bot.onText(/\/start/, (msg, match) => {  
@@ -203,7 +213,7 @@ function initBot() {
     setChatId(chatId);
 
     // send back the matched "whatever" to the chat
-    global.bot.sendMessage(chatId, 'started');
+    botSend(chatId, 'started');
   })
 }
 
@@ -217,13 +227,9 @@ function getChatId() {
 }
 
 function sendMessage(msg) {
-  let chatId = getChatId();
-  if (!chatId || !global.bot) return;
-  global.bot.sendMessage(chatId, msg);
+  botSend(getChatId(), msg);
 }
 
 function sendMessageFormatted(msg) {
-  let chatId = getChatId();
-  if (!chatId || !global.bot) return;
-  global.bot.sendMessage(chatId, msg, {parse_mode: 'HTML'});
+  botSend(getChatId(), msg, {parse_mode: 'HTML'});
 }
