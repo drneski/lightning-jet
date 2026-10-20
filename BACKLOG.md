@@ -536,7 +536,7 @@ removes `goldengate` and `express`.
 
 ---
 
-## 23. The Docker install is not tested end to end
+## 23. The Docker container is not tested against a live node
 
 **Severity:** low
 **Where it belongs:** Jet 2.0, or drop it in favour of Foundry's packaging
@@ -544,7 +544,9 @@ removes `goldengate` and `express`.
 1.7.0 fixes the image build (#107) and the generated config: an April 2025
 change had pointed the container's config at the host's Umbrel 0.5 paths, while
 `docker-compose.yml` always mounts LND at `/home/umbrel/umbrel/lnd` inside the
-container. Neither change could be tested, because no Docker host was
-available. The `LND_IP_ADDRESS` default (`10.21.21.9`) dates from Umbrel 0.4 and
-is likely stale. Build and run the image against a real node before relying on
-this path.
+container. `tools/test-on-node <host> --docker` builds the image on a node and
+runs `jet -v` and the native modules in it; that passed on the Neski node (a
+Raspberry Pi, `node:lts-alpine` with Node 24) in October 2026. Nothing has run
+the container against LND, though, so the config fix is untested, and the
+`LND_IP_ADDRESS` default (`10.21.21.9`) dates from Umbrel 0.4 and is likely
+stale. Run the container against a real node before relying on this path.
