@@ -70,6 +70,27 @@ Next, execute the updated `.profile` for your current terminal session. The path
 ```
 Test your path by running `jet -v`. Your path is set correctly if it prints out the version. Fix the `PATH` in `~/.profile` in case of an error.
 
+#### Upgrading jet
+
+Run these from the `lightning-jet` folder. Jet 1.7.0 and later need Node 22, so stop jet first, while your current Node is still the default:
+
+```bash
+jet stop all
+nvm install 22 && nvm alias default 22
+git remote set-url origin https://github.com/drneski/lightning-jet.git
+git checkout -- package-lock.json
+git pull
+npm ci
+jet -v
+jet start all
+```
+
+- `nvm alias default 22` keeps new shells on Node 22. Started on an older Node, jet stops with an error saying so. Without nvm, install Node 22 as in [Prerequisites](#prerequisites).
+- `git checkout -- package-lock.json` drops changes that `npm install` may have made to the lockfile, which would otherwise stop `git pull`.
+- Your `config.json` and database carry over. Automated rebalances are now capped at 100,000 sats of fees a day unless you set `maxDailyFee` (see [Config file](#config-file)).
+
+With Docker, `git pull`, rebuild with `docker-compose -f docker/docker-compose.yml build`, and start it again as in [Start up daddy](#start-up-daddy).
+
 #### Upgrade to Umbrel0.5.0 (Umbrel5)
 
 Umbrel5 changed the location of macaroons and tls cert files. Edit config file to set correct paths for macaroons at `/home/umbrel/umbrel/app-data/lightning/data/lnd/data/chain/bitcoin/mainnet/admin.macaroon` and tls cert at `/home/umbrel/umbrel/app-data/lightning/data/lnd/tls.cert`.
@@ -87,7 +108,7 @@ nano ./api/config.json
 "tlsCertPath": "/home/bos/.lnd/tls.cert"
 ```
 
-The following step may not be necessary in case you get read access to channel.db via a symlink.
+The following step is only needed if jet cannot read `admin.macaroon` as is.
 
 ```bash
 chmod +r /home/bos/.lnd/data/chain/bitcoin/mainnet/admin.macaroon
@@ -128,7 +149,7 @@ jet help
 |`jet htlc-history`|Shows total sats that peers routed based on htlc history. Notable columns: `%` of inbound or outbound routing by a peer out of total [inbound or outbound] across all peers; `d%` of [inbound or outbound] routing by a peer out of total routing [inbound & outbound] by the peer.|
 |`jet rebalance-history --hours 12`|Shows rebalance history for all peers over the past 12 hours.|
 |`jet rebalance-history coingate --hours 12`|Shows rebalance history for coingate over the past 12 hours.|
-|`jet rebalance d++ neski 500000 --ppm 550 --mins 30`|Circular rebalance from dplus to neski for 5mil sats with 550 max ppm and a max runtime of 30 mins.|
+|`jet rebalance d++ neski 500000 --ppm 550 --mins 30`|Circular rebalance from dplus to neski for 500,000 sats with 550 max ppm and a max runtime of 30 mins.|
 |`jet update-channel 769123776873431041 --base 1 --ppm 375`|Sets the base fee to 1 msat and ppm to 375 sats per million for a channel with id of 769123776873431041.|
 |`jet reconnect`|Reconnects to disconnected peers (via BalancesOfSatoshis (bos) api)|
 
@@ -308,13 +329,13 @@ Settings under `rebalancer` section:
 |`maxTime`|Timeout rebalance after N minutes. This setting can be overridden by `jet rebalance --mins` parameter for manual rebalances.|
 |`maxInstances`|Maximum rebalance instances that the auto rebalancer can launch. Keep this setting lower if your node gets overloaded (e.g., monitor by `top` command).|
 |`maxPendingHtlcs`|Maximum number of pending htlcs that a peer can have for circular rebalance. Rebalance will be skipped otherwise.|
-|`maxDailyFee`|Maximum fees, in sats, that automated rebalances may spend in a rolling 24 hours. Fees already paid count toward it, including manual rebalances, plus the most that running rebalances can still spend. Rebalances that would exceed it are skipped until older fees age out. Defaults to `100000`; set to `0` to disable.|
+|`maxDailyFee`|Maximum fees, in sats, that automated rebalances may spend in a rolling 24 hours. Fees already paid count toward it, including manual rebalances, plus the full fee limit (amount × max ppm) of rebalances still running. Rebalances that would exceed it are skipped until older fees age out. Defaults to `100000`, which also applies to existing configs that don't set it; raise it if your node routinely spends more, or set `0` to disable.|
 |`enforceMaxPpm`|Controls whether jet will enforce max ppm default set by `maxAutoPpm` for all rebalances. By default, as long as rebalances are still profitable, jet may override the default max ppm with [outbound] peer's local ppm. With `enforceMaxPpm` set to `true` jet will cap the rebalances by`maxAutoPpm`. The downside is that it may reduce the rebalance success rate for peers with local ppm being higher than the default max ppm.|
 |`enforceProfitability`|When set to true, jet will pause all non profitable automated rebalances, leaving only profitable rebalances. Monitor rebalance status by `jet monitor --status`|
-|`minCapacity`|Sets minimum capacity (in sats) for channels to be included in automated rebalancing. For example, `"minCapacity": 500000` means that channels with capacity below or equal to `500000` sats will be excluded from automated rebalancing.|
-|`buffer`|Minimum rebalance buffer in sats, overrides default value of `250`. Jet will warn when the delta between local and remote ppm for outbound and balanced peers is below the buffer.|
+|`minCapacity`|Minimum capacity (in sats) for a channel with no routing history to be included in automated rebalancing; defaults to `990000`. For example, `"minCapacity": 500000` means that such channels with capacity below `500000` sats are left out. Channels that have routed are included regardless of capacity.|
+|`buffer`|Minimum rebalance buffer in ppm, overrides default value of `250`. Jet will warn when the delta between local and remote ppm for outbound and balanced peers is below the buffer.|
 |`disabled`|When set to true, the setting disables automated rebalancer. You can still rebalance manually via `jet rebalance`. Requires restart of the daddy service `jet restart daddy` followed by `jet stop rebalancer`.|
-|`exclude`|A list of nodes to exclude from auto rebalancing. In terms of terminology, rebalance A -> B means that liquidity is moving from the local side of channel [with peer] A to the local side of channel with B. "exclude": ["A:from", "B:to", "C:all"] ensures that A won't be rebalanced from, B won't be rebalanced into, and C won't participate in the rebalancing at all. p.s. previous "A:inbound" is equivalent to "A:from", and "B:outbound" is equivalent to "B:to".|
+|`exclude`|A list of nodes to exclude from auto rebalancing. In terms of terminology, rebalance A -> B means that liquidity is moving from the local side of channel [with peer] A to the local side of channel with B. "exclude": ["A:from", "B:to", "C:all"] ensures that A won't be rebalanced from, B won't be rebalanced into, and C won't participate in the rebalancing at all. Nodes are identified by their pubkeys, and an entry without a suffix means `:to`. p.s. previous "A:inbound" is equivalent to "A:from", and "B:outbound" is equivalent to "B:to".|
 
 ### Example:
 
@@ -324,8 +345,8 @@ Settings under `rebalancer` section:
     "03d2e20bc19d995098ba357157a9cfbfbfdff4b78fce5ec713128e988e0115d776",
     "03f80288f858251aed6f70142fab79dede5427a0ff4b618707bd0a616527a8cec7"
   ],
-  "macaroonPath": "/home/umbrel/umbrel/lnd/data/chain/bitcoin/mainnet/admin.macaroon",
-  "tlsCertPath": "/home/umbrel/umbrel/lnd/tls.cert",
+  "macaroonPath": "/home/umbrel/umbrel/app-data/lightning/data/lnd/data/chain/bitcoin/mainnet/admin.macaroon",
+  "tlsCertPath": "/home/umbrel/umbrel/app-data/lightning/data/lnd/tls.cert",
   "debugMode": false,
   "telegramToken": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
   "rebalancer": {

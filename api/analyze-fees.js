@@ -124,7 +124,7 @@ module.exports = {
 
     let intro = 'current fees: local { base: ' + localFee.base + ', ppm: ' + localFee.rate + ' } remote { base: ' + remoteFee.base + ', ppm: ' + remoteFee.rate + ' }. max ppm: ' + maxPpm + ' (';
     intro += (enforceMaxPpm) ? 'enforced)' : 'not enforced)';
-    intro += ', rebalance buffer is ' + buffer + ' sats';
+    intro += ', rebalance buffer is ' + buffer + ' ppm';
     if (enforceProfitability) intro += ', profitability is enforced';
     if (profit) intro += ', profit margin: ' + profit + '%';
     if (feeStats) intro += '\nthe peer changed ppm ' + feeStats.count + ' time(s) over the past ' + feeHistoryDepth + ' hours, min: ' + feeStats.min + ', max: ' + feeStats.max;

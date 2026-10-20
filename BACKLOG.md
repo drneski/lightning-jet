@@ -213,9 +213,9 @@ That is a reasonable gradual-adoption stance, but "check passes" currently
 means less than it appears. Either clear the 17 and promote the rules to
 `error`, or leave them and be explicit that the gate only catches hard errors.
 
-Also `eslint.config.cjs` ignores `old-jet-caporal.js`, which does not exist —
-the real file is `jet.caporal.backup`, already covered by the `*.backup` entry.
-Stale, safe to drop.
+Also `eslint.config.cjs` ignores `old-jet-caporal.js`, which does not exist;
+the old caporal CLI only ever lived in an untracked `jet.caporal.backup`, now
+gone. Stale, safe to drop.
 
 ---
 
@@ -232,7 +232,9 @@ Stale, safe to drop.
 ## 10. `tools/genconfig` still writes the pre-umbrel-0.5 macaroon paths — RESOLVED
 
 **Resolved** for 1.7.0: `tools/genconfig` now writes the same `app-data/lightning`
-paths as `docker/genconfig.sh` and the README.
+paths as the README. (`docker/genconfig.sh` deliberately does not: its config is
+read inside the container, where LND is mounted at `/home/umbrel/umbrel/lnd`;
+see item 23.)
 
 **Severity:** high — every fresh host install starts broken
 **Where it belongs:** its own branch, small
@@ -521,18 +523,21 @@ connection.
 **Severity:** medium — security debt
 **Where it belongs:** Jet 2.0
 
-`npm audit --omit=dev` on 1.7.0 reports 41 advisories, 4 critical (1.6.0 had
-62, 9 critical). Item 11 covers `form-data` and `request`, which come in through
-`node-telegram-bot-api`. The other two:
+`npm audit --omit=dev` on 1.7.0 reports 41 advisories, 3 critical (1.6.0 had
+62, 9 critical); 1.7.0 already patched `proxy-addr`, `fast-uri` and
+`ip-address` within their ranges. Item 11 covers `form-data` and `request`,
+which come in through `node-telegram-bot-api`. The rest:
 
-- **`tar`**, via `sqlite3` 5.x. The fix is `sqlite3` 6, a major upgrade. It is
-  used at install time, not by jet's code.
-- **`proxy-addr`**, via `balanceofsatoshis` → `goldengate` → `express`. A patch
-  exists, but `npm audit fix` would change 76 packages to apply it. Jet runs no
-  HTTP server, so the IP-spoofing issue is not reachable from jet.
+- **`tar`**, via `sqlite3` 5.x and via `node-gyp` 10.1.0 (which also flags
+  `cacache`, `make-fetch-happen` and `node-gyp` itself). Both are install-time
+  only: node-gyp uses it to unpack Node's headers from nodejs.org. The fixes
+  are `sqlite3` 6 and `node-gyp` 13, both major, and node-gyp 10.2+ cannot run
+  on Python 3.7 (see CLAUDE.md), so this waits for dropping Python 3.7.
+- **Most of the highs** come from `balanceofsatoshis` 19's tree (`@grpc/grpc-js`,
+  `express`, `goldengate`, `ln-service` and others); the fix is bos 25, a major.
 
-Both go away with item 16: `node:sqlite` replaces `sqlite3`, and dropping `bos`
-removes `goldengate` and `express`.
+Item 16 removes most of this: `node:sqlite` replaces `sqlite3`, and dropping
+`bos` removes its tree.
 
 ---
 
@@ -550,3 +555,20 @@ Raspberry Pi, `node:lts-alpine` with Node 24) in October 2026. Nothing has run
 the container against LND, though, so the config fix is untested, and the
 `LND_IP_ADDRESS` default (`10.21.21.9`) dates from Umbrel 0.4 and is likely
 stale. Run the container against a real node before relying on this path.
+
+---
+
+## 24. Smaller findings from the 1.7.0 release review
+
+**Severity:** low
+**Where it belongs:** Jet 2.0
+
+- **Options after a subcommand go to the top level.** Commander's positional
+  options are off, so `--quiet`, `--no-color` and `-v` after a subcommand are
+  read by the top-level program: `jet <cmd> -v` prints the version instead of
+  running the command (in caporal `-v` meant `--verbose`), and caporal's
+  `--silent` is gone.
+- **The 95% memory alert repeats every minute** (`api/constants.js` osStats);
+  on a node that sits near full memory that is a Telegram message a minute.
+- **Integer-only day counts.** `peers --days` and `htlc-history [days]` reject
+  fractional values that 1.6 accepted.

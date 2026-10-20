@@ -12,7 +12,7 @@ Lightning Jet ("jet") is an automated channel rebalancer for LND nodes on the Li
 node jet <command> --help   # explore any command; ./jet is the installed bin (adds itself to PATH)
 npm run lint                 # eslint over jet, cli/**, service/**
 npm run lint:errors          # eslint --quiet (errors only)
-npm run check:cli            # smoke-test: runs --help for every registered command
+npm run check:cli            # smoke-test: runs --help for every command except start/stop/restart
 npm run test:cli-surface     # golden-file snapshot of the CLI surface + README flag checks
 npm run check                # check:cli + test:cli-surface + lint:errors — run before considering CLI work done
 tools/test-on-node <ssh-host> [--ref <ref>] [--docker]   # install on a real node in a throwaway folder and run the checks there
@@ -42,8 +42,8 @@ Layered, with a hard split between the user-facing CLI and the always-on daemons
 ## Conventions and gotchas
 
 - **`deasync`-based sync wrappers**: the `*Sync` functions in `db/utils.js` and `lnd-api/utils.js` block the event loop to return synchronously. This is the dominant style — match it in existing sync code paths rather than converting to async.
-- **`import-lazy`**: services and some commands require `api/config`, `api/connect`, and `lnd-api/utils` lazily (`importLazy('../api/config')`) so that code paths not needing LND don't crash on a missing/invalid `config.json`. Preserve this — don't hoist those requires to the top eagerly.
+- **`import-lazy`**: some code paths require `api/config`, `api/connect` or `lnd-api/utils` lazily (`importLazy('../api/connect')`) so that paths not needing LND don't crash on a missing/invalid `config.json`: the rebalancer, worker and telegram services load the LND client lazily, as do the CLI's LND helpers. Plenty of other requires are eager (the launcher, logger and `service/utils.js` load `api/config` directly, and most `lnd-api/utils` imports are plain `require`). Preserve the lazy requires where they exist — don't hoist them to the top eagerly.
 - **ESLint scope is deliberately narrow**: `eslint.config.cjs` (flat config) lints only `jet`, `cli/**`, and `service/**`. The `api/`, `lnd-api/`, `bos/`, and `db/` layers are older code and are intentionally not linted; don't assume lint covers a change there.
-- **CLI was migrated from caporal to Commander.** `jet.caporal.backup` (untracked) is the old CLI kept for reference; `before-*.txt` are pre-migration `--help` snapshots used to check output parity. These are not part of the running code.
+- **CLI was migrated from caporal to Commander.** The 1.6.0 caporal CLI is in the `jet` file of tag `v1.6.0-db-cleanup` (`git show v1.6.0-db-cleanup:jet`); `test/cli-help.snapshot` records the current `--help` surface.
 - Config resolution differs by install: host installs read `api/config.json`; the Docker path uses `$HOME/.lightning-jet/config.json` (`docker/genconfig.sh`).
 - **Native module builds are pinned in `package.json`.** deasync has no prebuilt binaries for Node 22+, so every install compiles it, with whichever `node-gyp` is first on PATH: `node_modules/.bin/node-gyp` if one is installed at the top level, otherwise npm's own bundled copy. So `node-gyp` is a direct dependency, pinned to exactly 10.1.0, with a matching `overrides` entry for the copy `sqlite3` asks for. 9.x and earlier import Python's `distutils`, which Python 3.12+ no longer ships; 10.2 and later use syntax Python 3.7 cannot parse (Debian 10, older Umbrel). Don't change it without running `tools/test-on-node` on an old and a new Python. `allowScripts` approves the install scripts of `deasync` and `sqlite3` by exact version (npm says a future release will block unapproved ones). After bumping either package, run `npm approve-scripts <pkg>` or its build will be skipped once npm enforces this.
