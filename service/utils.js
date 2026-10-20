@@ -128,7 +128,7 @@ class TelegramBot extends Service {
     this.name = TelegramBot.name;
     this.proc = 'telegram.js';
     this.log = '/tmp/jet-telegram.log';
-    this.help = 'https://github.com/itsneski/lightning-jet#telegram-bot';
+    this.help = 'https://github.com/drneski/lightning-jet#telegram-bot';
   }
 
   isConfigured() {

@@ -7,7 +7,7 @@
     "jet": "./jet"
   },
   "bugs": {
-    "url": "https://github.com/itsneski/lightning-jet/issues"
+    "url": "https://github.com/drneski/lightning-jet/issues"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.4",
@@ -42,7 +42,7 @@
   "name": "lightning-jet",
   "repository": {
     "type": "git",
-    "url": "https://github.com/itsneski/lightning-jet.git"
+    "url": "https://github.com/drneski/lightning-jet.git"
   },
   "scripts": {
     "postinstall": "./tools/genconfig",

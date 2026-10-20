@@ -48,7 +48,7 @@ On macOS, run `xcode-select --install`.
 ## Installation
 
 ```bash
-git clone https://github.com/itsneski/lightning-jet
+git clone https://github.com/drneski/lightning-jet
 cd lightning-jet
 npm install
 nano ./api/config.json
@@ -80,7 +80,7 @@ nano ./api/config.json
 
 #### RaspiBlitz
 
-- Install JET (following the [above steps](#node-and-npm)) 
+- Install JET (following the [above steps](#prerequisites)) 
 - Set the following in `config.json`:
 ```
 "macaroonPath": "/home/bos/.lnd/data/chain/bitcoin/mainnet/admin.macaroon"
@@ -145,7 +145,7 @@ This installation is for advanced users with prior Docker experiece. Refer [here
 ### Installation
 
 ```bash
-git clone https://github.com/itsneski/lightning-jet
+git clone https://github.com/drneski/lightning-jet
 cd lightning-jet
 . docker/genconfig.sh
 ```
@@ -177,7 +177,7 @@ docker-compose -f docker/docker-compose.yml up
 
 ### Execute commands
 
-Prepend [all commands](#how-to-run) with `docker exec -it lightning-jet`:
+Prepend [all commands](#how-to-use) with `docker exec -it lightning-jet`:
 ```shell
 docker exec -it lightning-jet jet help
 ```
