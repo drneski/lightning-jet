@@ -202,14 +202,14 @@ Arguments:
   request              Payment Request
 
 Options:
-  --avoid <avoid...>   Avoid forwarding via node/chan/tag
+  --avoid <avoid>      Avoid forwarding via node/chan/tag (repeat for more)
   --in <peer>          Route through specific peer of destination
   --max-fee <sats>     Maximum fee to pay (default: 1337)
   --max-paths <paths>  Maximum paths to use (default: 1)
   --message <message>  Attach text message to payment
   --no-color           Mute all colors
   --node <node>        Node to use to pay payment request
-  --out <peer...>      Make first hop through peer
+  --out <peer>         Make first hop through peer (repeat for more)
   --quiet              Quiet mode - only displays warn and error messages
   --verbose            Verbose mode - will also output debug messages
   -h, --help           display help for command

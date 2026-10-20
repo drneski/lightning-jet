@@ -12,14 +12,16 @@ function registerPayCommand(program) {
     .summary('Pay an invoice')
     .description('Pay a Lightning invoice.')
     .argument('<request>', 'Payment Request')
-    .option('--avoid <avoid...>', 'Avoid forwarding via node/chan/tag')
+    // one value per flag, repeatable, as in 1.6: a variadic option would also
+    // swallow the payment request that follows it
+    .option('--avoid <avoid>', 'Avoid forwarding via node/chan/tag (repeat for more)', collect)
     .option('--in <peer>', 'Route through specific peer of destination')
     .option('--max-fee <sats>', 'Maximum fee to pay', parsePositiveInt, 1337)
     .option('--max-paths <paths>', 'Maximum paths to use', parsePositiveInt, 1)
     .option('--message <message>', 'Attach text message to payment')
     .option('--no-color', 'Mute all colors')
     .option('--node <node>', 'Node to use to pay payment request')
-    .option('--out <peer...>', 'Make first hop through peer')
+    .option('--out <peer>', 'Make first hop through peer (repeat for more)', collect)
     .action(async (request, options) => {
       requireLndAlive();
 
@@ -37,6 +39,10 @@ function registerPayCommand(program) {
 
       console.log(ret);
     });
+}
+
+function collect(value, previous) {
+  return (previous || []).concat([value]);
 }
 
 function parsePositiveInt(value) {
