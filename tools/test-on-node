@@ -66,6 +66,9 @@ cleanup() {
   echo DONE
 }
 trap cleanup EXIT
+# run at the lowest CPU and disk priority: on a node, a heavy install can slow
+# jet's own services enough that their sqlite writes collide and fail
+low() { if command -v ionice >/dev/null 2>&1; then nice -n 19 ionice -c 2 -n 7 "$@"; else nice -n 19 "$@"; fi; }
 
 if [ -s ~/.nvm/nvm.sh ]; then
   . ~/.nvm/nvm.sh >/dev/null
@@ -74,7 +77,7 @@ fi
 cd "$DIR"
 echo "node $(node -v), npm $(npm -v), $(python3 -V 2>&1), $(uname -m), $(. /etc/os-release && echo "$PRETTY_NAME")"
 
-if npm ci --foreground-scripts --no-audit --no-fund > "$DIR.log" 2>&1; then
+if low npm ci --foreground-scripts --no-audit --no-fund > "$DIR.log" 2>&1; then
   echo "ok: npm ci ($(grep -o 'using node-gyp@[0-9.]*' "$DIR.log" | sort -u | tr '\n' ' '))"
   # postinstall writes a default config whose paths, on an umbrel, are the real
   # LND credentials. Point them nowhere so the checks below cannot reach LND;
@@ -88,7 +91,7 @@ if npm ci --foreground-scripts --no-audit --no-fund > "$DIR.log" 2>&1; then
   if node -e "require('deasync').sleep(1); new (require('sqlite3').Database)(':memory:').close()"; then
     echo "ok: deasync and sqlite3 load"
   else fail "native modules do not load"; fi
-  if npm run check > "$DIR.log" 2>&1; then echo "ok: npm run check"
+  if low npm run check > "$DIR.log" 2>&1; then echo "ok: npm run check"
   else fail "npm run check"; tail -20 "$DIR.log"; fi
 else
   fail "npm ci"; grep -E "ERR!|Error" "$DIR.log" | grep -v "gyp info" | head -20
