@@ -423,6 +423,7 @@ function runLoopImpl() {
       if (currCount >= maxCount) return;
       const from = channelMap[e.chan_id_in];
       const to = channelMap[e.chan_id_out];
+      if (!from || !to) return;  // a channel left out of classification
 
       // attempt a rebalance
       logger.debug('[forward]', 'from:', from.name, from.peer, 'to:', to.name, to.peer, 'sats:', e.sats);
@@ -525,6 +526,10 @@ function runLoopImpl() {
     // determine max ppm
     let maxPpm = defaultMaxPpm;
     let fee = feeMap[to.peer];
+    if (!fee) {
+      // a new channel whose fee policy hasn't propagated yet
+      return logger.debug(pref + 'no fee data for ' + to.name + ' yet, skipping');
+    }
     let analysis = analyzeFees(to.name, to.peer, fee.local, fee.remote);
     if (analysis) {
       const action = constants.feeAnalysis.action;

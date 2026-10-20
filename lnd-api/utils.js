@@ -403,7 +403,7 @@ module.exports = {
         let fee = {
           chan: r.channel_id,
           id: r.peer,
-          name: peers[r.peer].name,
+          name: peers[r.peer] ? peers[r.peer].name : r.peer,  // no node announcement
         }
         if (!r.node1_policy || !r.node2_policy) {
           // likely that a channel has been added but fees haven't yet

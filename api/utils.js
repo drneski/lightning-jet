@@ -447,7 +447,7 @@ module.exports = {
     htlcs.forEach(h => {
       h.htlcs.forEach(t => {
         formatted.push({
-          peer: peers[h.peer].name,
+          peer: peers[h.peer] ? peers[h.peer].name : h.peer,  // no node announcement
           ttl: t.expiration_height - info.block_height,
           incoming: t.incoming,
           amount: withCommas(t.amount),
