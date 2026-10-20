@@ -186,7 +186,8 @@ module.exports = ({from, to, amount, ppm = config.rebalancer.maxPpm || constants
       const iterationStart = Date.now();
       let timeRunning = Math.round((Date.now() - startTime) / 1000 / 60);
       let timeLeft = maxRuntime - timeRunning;
-      if (timeLeft < 0) {
+      // stop at 0 as well: bos reads mins: 0 as no time limit at all
+      if (timeLeft <= 0) {
         logger.log('ran out of time');
         lastMessage = 'ran out of time';
         break;

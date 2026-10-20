@@ -49,8 +49,19 @@ logger.log('rebalancer is starting up');
 const maxCount = config.rebalancer.maxInstances || constants.rebalancer.maxInstances;
 const defaultMaxPpm = config.rebalancer.maxAutoPpm || constants.rebalancer.maxAutoPpm;
 const maxPendingHtlcs = config.rebalancer.maxPendingHtlcs || constants.rebalancer.maxPendingHtlcs;
-// `??` rather than `||` so that an explicit 0, which disables the cap, is kept
-const maxDailyFee = config.rebalancer.maxDailyFee ?? constants.rebalancer.maxDailyFee;
+// `??` rather than `||` so that an explicit 0, which disables the cap, is kept.
+// Anything that isn't a non-negative number, such as a typo like "100k", falls
+// back to the default: compared with `> 0` it would silently turn the cap off.
+const maxDailyFee = (() => {
+  const val = config.rebalancer.maxDailyFee ?? constants.rebalancer.maxDailyFee;
+  const num = (typeof val === 'number' || (typeof val === 'string' && val.trim() !== '')) ? Number(val) : NaN;
+  if (Number.isFinite(num) && num >= 0) return num;
+  const msg = 'rebalancer.maxDailyFee should be a number of sats, not ' + JSON.stringify(val) +
+    '; using the default of ' + constants.rebalancer.maxDailyFee;
+  logger.error(msg);
+  sendMessage('rebalancer: ' + msg);
+  return constants.rebalancer.maxDailyFee;
+})();
 const historyDepth = 2 * 60 * 60; // secs
 const minToRebalance = 50000; // min liquidity to rebalance
 const minLocal = 1000000; // min local liquidity for balanced peers
@@ -554,6 +565,13 @@ function processQueue() {
 // seconds and refilled every loop, so report at most once per cap window
 let feeCapReportedAt = 0;
 
+// Fee limits of rebalances spawned in the last few minutes. A spawned process
+// registers its active row only after it has looked up peers and fees, so a
+// pass that starts before then would not see it; count it here until its row
+// is surely there. Counting it twice for a while errs high, like the cap does.
+const spawnedRecently = [];
+const spawnRegisterMins = 3;
+
 function processQueueImpl() {
   const normalizeName = name => {
     return removeEmojis(name).replace(constants.logNameRegEx, "").substring(0, 15); // hardcoded???
@@ -569,9 +587,14 @@ function processQueueImpl() {
     // Daily fee cap. A peer that can predict rebalances can provoke them to
     // collect the fees, and the per-rebalance ppm limit does nothing to bound
     // how many run in a day. Each rebalance counts at the most it may spend.
+    let maxFee;
     if (maxDailyFee > 0) {
-      if (committed === undefined) committed = rebalanceFeesCommittedSync();
-      const maxFee = Number(item.amount) * Number(item.maxPpm) / 1000000;
+      if (committed === undefined) {
+        const now = Date.now();
+        while (spawnedRecently.length && spawnedRecently[0].until <= now) spawnedRecently.shift();
+        committed = rebalanceFeesCommittedSync() + spawnedRecently.reduce((sum, s) => sum + s.maxFee, 0);
+      }
+      maxFee = Number(item.amount) * Number(item.maxPpm) / 1000000;
       // fail closed: NaN compares false, which would let the rebalance through
       // and leave the cap off for the rest of the pass
       if (!Number.isFinite(committed) || !Number.isFinite(maxFee)) {
@@ -602,6 +625,7 @@ function processQueueImpl() {
     }
     logger.debug('rebalancing queue: spawn process:', JSON.stringify(sarg, null, 2));
     if (!testModeOn) spawnDetached(sarg);
+    if (maxFee !== undefined) spawnedRecently.push({maxFee, until: Date.now() + spawnRegisterMins * 60 * 1000});
   }
 }
 

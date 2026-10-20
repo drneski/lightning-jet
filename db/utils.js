@@ -920,15 +920,23 @@ module.exports = {
   // their time limit may spend. A running rebalance counts at its full fee limit
   // even after recording part of its spend, so the total can run high while one
   // is in flight; this backs a cap, where high stops rebalancing early rather
-  // than late. Rows past their time limit are ignored, so a run that died
-  // without removing its row cannot hold budget indefinitely.
+  // than late. A running row is held until twice its time limit, when the
+  // worker kills a run that is still going, so a run that died without removing
+  // its row cannot hold budget indefinitely.
   rebalanceFeesCommittedSync(secs = 24 * 60 * 60) {
     const now = Date.now();
+    // older runs stored ppm as the text 'NaN' when bos reported no fee (under
+    // 1 sat); count such rows, and anything else unreadable, as 0 rather than
+    // letting one row turn the whole total into NaN
+    const fee = (sats, ppm) => {
+      const f = Number(sats) * Number(ppm) / 1000000;
+      return Number.isFinite(f) ? f : 0;
+    };
     const paid = module.exports.listRebalancesSync(secs, 1)
-      .reduce((sum, r) => sum + (r.rebalanced || 0) * (r.ppm || 0) / 1000000, 0);
+      .reduce((sum, r) => sum + fee(r.rebalanced, r.ppm), 0);
     const running = module.exports.listActiveRebalancesSync()
-      .filter(r => r.date + (r.mins || 0) * 60 * 1000 > now)
-      .reduce((sum, r) => sum + (r.amount || 0) * (r.ppm || 0) / 1000000, 0);
+      .filter(r => r.date + 2 * (r.mins || 0) * 60 * 1000 > now)
+      .reduce((sum, r) => sum + fee(r.amount, r.ppm), 0);
     return Math.ceil(paid + running);
   },
   enableTestMode() {

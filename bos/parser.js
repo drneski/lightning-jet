@@ -51,9 +51,15 @@ module.exports = {
       return ret;
     }
     const parseVal = (val) => Math.round(parseFloat(val) * 100000000);
-    const parsePpm = (ppm) => parseInt(ppm.match(/\((.*?)\)/)[1]);
+    const parsePpm = (ppm) => {
+      const m = (typeof ppm === 'string') && ppm.match(/\((.*?)\)/);
+      return m ? parseInt(m[1]) : 0;
+    }
     ret.amount = parseVal(arr[2]['rebalanced']);
-    ret.fees = parseVal(arr[2]['rebalance_fees_spent']);
+    // bos leaves the fee out when it is under 1 sat: that is a fee of 0, and
+    // parsing the missing value would record NaN
+    const spent = arr[2]['rebalance_fees_spent'];
+    ret.fees = (spent === undefined) ? 0 : parseVal(spent);
     ret.ppm = parsePpm(arr[2]['rebalance_fee_rate']);
     ret.original = res;
     return ret;
