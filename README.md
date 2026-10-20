@@ -150,13 +150,13 @@ cd lightning-jet
 . docker/genconfig.sh
 ```
 
-Edit `$HOME/.lightning-jet/config.json`: set correct paths for `macaroonPath` and `tlsCertPath`. On Umbrel, macaroons are located at `/home/umbrel/umbrel/lnd/data/chain/bitcoin/mainnet/admin.macaroon`, tls cert is at `/home/umbrel/umbrel/lnd/tls.cert`. Optional: list expensive nodes to avoid in the `avoid` section.
+Edit `$HOME/.lightning-jet/config.json`: set correct paths for `macaroonPath` and `tlsCertPath`. These are paths inside the container, where your LND directory is mounted at `/home/umbrel/umbrel/lnd`: the defaults, `/home/umbrel/umbrel/lnd/data/chain/bitcoin/mainnet/admin.macaroon` and `/home/umbrel/umbrel/lnd/tls.cert`, work as long as `LND_DIR` (below) points at your LND directory. Optional: list expensive nodes to avoid in the `avoid` section.
 
 ```bash
 nano $HOME/.lightning-jet/config.json
 ```
 
-Edit the `docker/.env`: set `LND_DIR` to your installation of LND (typically `/home/umbrel/umbrel/lnd`). Set `LND_HOSTNAME` and `LND_IP_ADDRESS` to match your instance of LND. On Umbrel you can leave default `LND_HOSTNAME`. For `LND_IP_ADDRESS` run `ifconfig -a | grep inet` then select IP address that begins with `10.`. Make sure that `LND_CONFIG_FILE` path is correct.
+Edit the `docker/.env`: set `LND_DIR` to your installation of LND (on Umbrel 0.5 and later, `/home/umbrel/umbrel/app-data/lightning/data/lnd`). Set `LND_HOSTNAME` and `LND_IP_ADDRESS` to match your instance of LND. On Umbrel you can leave default `LND_HOSTNAME`. For `LND_IP_ADDRESS` run `ifconfig -a | grep inet` then select IP address that begins with `10.`. Make sure that `LND_CONFIG_FILE` path is correct.
 
 ```bash
 nano docker/.env
