@@ -512,6 +512,12 @@ snapshot with the `sqlite3` CLI while the logger runs. The `doIt()` retries
 cover only some calls, and item 3 explains why even those miss async errors, so
 a collision can silently drop a write.
 
+Seen in the 1.7.0 rebalancer test on the Neski node (25 hours, October 2026):
+24 `SQLITE_BUSY` errors, all from `recordLiquidity`, which opens one connection
+per node on a probed route and fires the inserts at once, so they collide with
+each other. Those are analysis-only samples that nothing reads back, and the
+code is unchanged from 1.6.0, but the same pattern would drop any write.
+
 Fix by switching to WAL (`PRAGMA journal_mode=WAL`, persistent in the file), so
 readers never block the writer, and setting `PRAGMA busy_timeout` on every
 connection.
@@ -572,3 +578,8 @@ stale. Run the container against a real node before relying on this path.
   on a node that sits near full memory that is a Telegram message a minute.
 - **Integer-only day counts.** `peers --days` and `htlc-history [days]` reject
   fractional values that 1.6 accepted.
+- **Timed-out rebalances leave no history.** `api/rebalance.js` records a
+  failure only for four error types, so a run that ends by running out of time
+  leaves no `rebalance_history` row and is missing from `jet rebalance-history`
+  (3 of 60 runs in the 1.7.0 test). The avoid list still records what it
+  learned. Unchanged from 1.6.
