@@ -31,9 +31,12 @@ if (isRunningSync(fileName, true)) {
   return console.error(`${fileName} is already running, only one instance is allowed`);
 }
 
+// Both subscriptions pass an empty request: protobufjs 7, which 1.7.0's gRPC
+// upgrade brought in, refuses to encode a missing one ("object expected"),
+// where 1.6's protobufjs 6 sent an empty message.
 async function subscribeToHtlcs() {
   console.log(formattedDate() + ' subscribing to htlc events');
-  for await (const event of routerRpc.subscribeHtlcEvents()) {
+  for await (const event of routerRpc.subscribeHtlcEvents({})) {
     let lf = event.link_fail_event;
     // filter events
     if (lf && lf.wire_failure === 'TEMPORARY_CHANNEL_FAILURE' && lf.failure_detail === 'INSUFFICIENT_BALANCE') {
@@ -44,7 +47,7 @@ async function subscribeToHtlcs() {
 
 async function subscribeToChannelEvents() {
   console.log(formattedDate() + ' subscribing to channel events');
-  for await (const event of lnRpc.subscribeChannelEvents()) {
+  for await (const event of lnRpc.subscribeChannelEvents({})) {
     try {
       logChannelUpdate(event);
     } catch(err) {
