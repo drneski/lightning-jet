@@ -1,0 +1,42 @@
+# Build output
+/jet
+/dist/
+*.test
+*.out
+coverage.*
+
+# Real node data. Anything taken from a live node (database copies, exports,
+# analysis) goes under local/, which is never committed. Tests and examples use
+# synthetic fixtures only.
+/local/
+
+# Databases, including copies of Jet's own and LND's
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Lightning and Bitcoin key material. Never commit these, even from a test node.
+*.macaroon
+tls.cert
+tls.key
+wallet.dat
+channel.backup
+*.seed
+
+# Local configuration and environment
+/jet.toml
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+sftp-config.json
+
+# Logs
+*.log

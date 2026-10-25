@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "not gofmt-formatted:"; echo "$unformatted"; exit 1; fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race ./...
+      # Jet ships as a static binary for the platforms nodes run on. Building
+      # with cgo off proves no dependency needs a C toolchain.
+      - name: Build without cgo for node platforms
+        run: |
+          for target in linux/arm64 linux/amd64 darwin/arm64; do
+            echo "building $target"
+            CGO_ENABLED=0 GOOS=${target%/*} GOARCH=${target#*/} go build -trimpath -o /dev/null ./cmd/jet
+          done
+
+  # Checks over the branch's whole history. The checkout fetches every branch
+  # and tag, 1.x included, so each check is limited to what HEAD reaches.
+  history:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Every commit is written with AI assistance and names the model (see
+      # AGENTS.md). Merge commits are made by GitHub and are exempt.
+      - name: Every commit carries a Co-Authored-By trailer
+        run: |
+          missing=$(git rev-list --no-merges HEAD | while read -r c; do
+            git log -1 --format='%(trailers:key=Co-Authored-By,valueonly)' "$c" | grep -q . || git log -1 --format='%h %s' "$c"
+          done)
+          if [ -n "$missing" ]; then echo "commits without a Co-Authored-By trailer:"; echo "$missing"; exit 1; fi
+      - name: Install gitleaks 8.30.1, verified against its published checksum
+        run: |
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+      # By default gitleaks scans every ref (git log --all), which here would
+      # include all of 1.x.
+      - name: Scan the branch's history for secrets
+        run: ./gitleaks git --redact --verbose --log-opts="--full-history HEAD" .
+      # gitleaks finds tokens and keys in text. Macaroons, databases and wallet
+      # files are binary or look like random hex, so refuse them by name.
+      - name: Refuse key material and databases
+        run: |
+          bad=$(git ls-files | grep -Ei '\.(macaroon|db|sqlite3?|seed|key)$|(^|/)(tls\.cert|wallet\.dat|channel\.backup|\.env)$' || true)
+          if [ -n "$bad" ]; then echo "files that must never be committed:"; echo "$bad"; exit 1; fi
