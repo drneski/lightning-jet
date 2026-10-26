@@ -104,3 +104,18 @@ func TestTheExampleConfigParses(t *testing.T) {
 		t.Errorf("example config = %+v", c)
 	}
 }
+
+func TestTheOverviewsConfigParses(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/architecture/overview.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, block, ok := strings.Cut(string(doc), "```ini\n")
+	block, _, closed := strings.Cut(block, "```")
+	if !ok || !closed {
+		t.Fatal("docs/architecture/overview.md has no ini block")
+	}
+	if _, err := Parse(strings.NewReader(block)); err != nil {
+		t.Errorf("the overview's jet.conf: %v", err)
+	}
+}

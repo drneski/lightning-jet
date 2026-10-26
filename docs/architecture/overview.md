@@ -255,26 +255,54 @@ recipients and no LND credential.
 
 **One process.** `jet run` runs everything in a single foreground process:
 observation, the engines and the LND subscriptions. It logs to standard output
-and standard error, answers a health check, and stops cleanly on `SIGTERM` or
-`SIGINT`. Work interrupted by a stop is reconciled with LND on the next start,
-never assumed finished or failed. Jet never daemonizes or supervises itself.
-1.7's watchdog (`daddy`), its process-name matching and its process per rebalance
+and standard error and stops cleanly on `SIGTERM` or `SIGINT`.
+- **Under systemd** it speaks the notify protocol: READY when started, a
+  watchdog ping every half watchdog period while no cycle is stuck, and
+  STOPPING on the way out.
+- **`jet health`** checks its heartbeats from the database and exits 1 if a
+  cycle is overdue or a stream has gone quiet.
+
+Work interrupted by a stop is reconciled with LND on the next start, never
+assumed finished or failed. Jet never daemonizes or supervises itself. 1.7's
+watchdog (`daddy`), its process-name matching and its process per rebalance
 are gone.
 
 **The platform supervises it:**
 
 | Where | Supervisor | Notes |
 |---|---|---|
-| Linux host | systemd | A hardened unit: Jet's own OS user, which can't read LND's admin macaroon; a read-only file system apart from Jet's data directory; network restricted to LND where systemd's address filters are available. This enforces Foundry's isolation and no-outbound-network rules at the OS level. |
+| Linux host | systemd | [`contrib/systemd/jet.service`](../../contrib/systemd/jet.service), described below |
 | App platforms (Umbrel, Start9) | the container runtime | A container image, networked to LND only |
 | Foundry managed mode | Foundry's supervisor | Jet only has to be a well-behaved foreground process |
 | macOS, for development | launchd, or run directly | |
 
+**The systemd unit.** A separate OS user is not enough on its own. On Umbrel,
+for example, `admin.macaroon` is owner-only but the other macaroons are
+world-readable, `router.macaroon` included, and that one can send payments. So
+the unit:
+- runs Jet as a fresh dynamic user with no capabilities and no new privileges;
+- leaves the file system read-only apart from its state directory;
+- replaces home directories with an empty tmpfs, then binds back in, read-only,
+  only LND's `tls.cert` and `readonly.macaroon` (a drop-in names them per node);
+- allows only localhost on the network.
+
+The address allowlist needs a kernel with cgroup BPF. Where that is missing,
+as on the Raspberry Pi kernel of Umbrel's Debian 10, systemd runs without it,
+and the only guard against outbound connections is Jet's code making none.
+
+**Configuration.** `jet.conf` uses the format node operators know from
+`lnd.conf`: `[sections]`, `key = value`, comment lines starting with `#` or
+`;`, and a key repeated to make a list. Unknown keys, repeated settings and
+comments after a value are errors with their line, because 1.7 silently
+ignored typos in its config, and `lnd.conf` would make a trailing comment part
+of the value. Flags override the file.
+[`contrib/jet.conf.example`](../../contrib/jet.conf.example) lists every key.
+
 **Talking to Jet:**
 
-- **The CLI,** from the first slice: `jet init`, `jet run`, `jet status`,
-  `jet explain <channel>` and `jet report`. Later come `jet mode <engine>
-  off|shadow|live` and `jet pause` / `jet resume`.
+- **The CLI:** `jet run`, `jet status`, `jet explain <channel>` and
+  `jet health` now. `jet init` and `jet report` come next, and later
+  `jet mode <engine> off|shadow|live` and `jet pause` / `jet resume`.
   - Read-only commands read the database directly; WAL mode allows readers
     alongside the daemon.
   - Commands that change state go to the running daemon over a local Unix
@@ -293,10 +321,10 @@ are gone.
 
 **Order:**
 
-1. The slice ships the CLI only.
-2. The observe phase adds a hardened systemd unit on the low-volume node, running
-   Jet as its own user with a read-only macaroon. That also tests the OS-level
-   isolation managed mode requires.
+1. The slice shipped the CLI only.
+2. The observe phase adds the config file, `jet health` and the hardened
+   systemd unit for the low-volume node, running Jet read-only. That also tests
+   the OS-level isolation managed mode requires.
 3. Then the web view and a container image for app platforms.
 4. Then controls.
 
@@ -322,62 +350,70 @@ listed under [Decisions](#decisions).
 
 | Table | Holds |
 |---|---|
-| `channels`, `peers` | Channel ids, capacity, peer, open and close dates |
-| `balance_snapshots` | Local and remote balance per channel, hourly |
-| `policies` | Our and peers' fees over time (base, ppm, inbound, CLTV, HTLC limits, disabled), with source |
-| `forwards`, `htlc_failures` | From LND, at msat precision, all failure types |
-| `snapshots`, `estimates`, `intents`, `abstentions`, `decisions`, `outcomes` | The decision records |
-| `jobs`, `attempts` | Durable execution work, one row per attempt |
-| `cost_estimates` | Learned replacement cost per channel and per edge, with confidence and freshness |
-| `meta` | Schema version |
+| `snapshots` | Every cycle's observation of the node: balances, both sides' policies, forwards and failures summarized, competing fees. For now this is the balance and policy history; separate `balance_snapshots` and `policies` tables come when queries need them. |
+| `htlc_failures` | Failed HTLCs as LND's stream reports them: both channels and HTLC ids, amounts, timelocks, failure codes, at msat precision. There is no payment hash; LND's stream has none. |
+| `channel_events` | Channels going up, down, open and closed, stamped when received |
+| `stream_events` | Every connect and disconnect of LND's streams, so coverage is known |
+| `estimates`, `intents`, `abstentions`, `decisions`, `outcomes` | The decision records |
+| `channels`, `peers` | Channel ids, capacity, peer, open and close dates (later) |
+| `forwards` | LND's forwarding history at msat precision (later; read from LND for now) |
+| `jobs`, `attempts` | Durable execution work, one row per attempt (with rebalancing) |
+| `cost_estimates` | Learned replacement cost per channel and per edge, with confidence and freshness (later) |
+| `meta` | Schema version, and heartbeats: the last cycle, when each stream was last seen alive |
 
 Migrations are versioned. The database runs in WAL mode, uses bound parameters
-only, and has a retention policy per table. Observations, estimates and decisions
-never share a table.
+only, and will have a retention policy per table. Observations, estimates and
+decisions never share a table.
 
-## Configuration, sketch
+## Configuration
 
-```toml
+`jet.conf`, in `lnd.conf`'s format. The full file is in
+[`contrib/jet.conf.example`](../../contrib/jet.conf.example).
+
+```ini
 [lnd]
-address       = "localhost:10009"
-tls_cert      = "/path/tls.cert"
-read_macaroon = "/path/readonly.macaroon"
-act_macaroon  = "/path/jet-act.macaroon"   # never the admin macaroon
+rest_address = localhost:8080
+tls_cert = /path/to/lnd/tls.cert
+macaroon = /path/to/lnd/data/chain/bitcoin/mainnet/readonly.macaroon
 
-[limits]
-daily_loss_ceiling_sat           = 10000
-monthly_loss_ceiling_sat         = 50000
-operating_budget_share           = 0.5     # of realized routing revenue
-operating_budget_window_days     = 30      # unspent allowance carries over
-exploration_budget_sat_per_month = 5000
-fee_ppm_min                      = 1
-fee_ppm_max                      = 3000
-max_fee_changes_per_channel_per_day = 2
-freeze = ["<channel id>"]                  # channels Jet must not change
-never  = ["<peer pubkey>"]                 # peers no refill routes through
+[jet]
+interval = 1h
 
 [fees]
-mode = "shadow"            # off | shadow | live
+# shadow or off
+mode = shadow
 
-[rebalance]
-mode = "shadow"
-low_volume_revival = false
+[limits]
+fee_ppm_min = 1
+fee_ppm_max = 3000
+max_step_pct = 15
+cooldown_hours = 12
+max_fee_changes_per_day = 2
+# Repeat the key for more channels.
+freeze = 111111111111111111
 
-[notify.telegram]          # separate process, no LND access
-token_file       = "/path/telegram.token"
-allowed_chat_ids = [123456789]
+[observe]
+window_days = 30
+gossip_refresh_hours = 24
 ```
 
-Keys carry their units, and values are validated at start. `jet init` writes the
-file; there is no install script.
+Keys carry their units, and values are validated at start. Budgets and loss
+ceilings (`[limits]`), the rebalancing engine's mode and the notifier
+(`[notify.telegram]`, a separate process with an allowlist of chat ids) arrive
+with the engines that use them. The acting macaroon arrives with the first
+engine that writes, never the admin macaroon.
 
 ## Code layout
 
 ```
 cmd/jet/            CLI and daemon
+contrib/            example jet.conf, the systemd unit and its drop-in
 internal/
+  config/           jet.conf, lnd.conf-style
   contracts/        snapshot, estimate, intent, abstention and decision records
   ids/              UUIDv7 identifiers
+  health/           systemd's notify protocol, and judging heartbeats
+  record/           LND's HTLC and channel streams, written as they happen
   observe/          snapshots of the node, with data quality per channel
   economics/        estimators: demand, replacement cost, value of liquidity
   strategy/         fee and rebalance strategies
@@ -515,8 +551,9 @@ the node's local data directory.
    - propose an intent or abstain;
    - authorize it in shadow mode;
    - record the decision and explain it.
-3. **Observe.** Widen the slice to every channel and build the per-channel
-   economics report. Still read-only.
+3. **Observe.** Record LND's HTLC and channel streams and the gossip prior, and
+   run unattended under systemd. Then the per-channel economics report
+   (`jet report`). Still read-only.
 4. **Fees.** Shadow, then bounded live experiments.
 5. **Rebalancing.** The payment execution specification, then shadow, then live
    within limits.
