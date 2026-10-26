@@ -45,7 +45,8 @@ leaves fees to the operator.
   a channel than the channel earns.
 - **Reflexes.** A forward over a threshold immediately queues a refill of the same
   amount, reversing the flow that just earned a fee.
-- **Learning.** The cheapest failed route is recorded and never read. Pairs that
+- **Learning.** The cheapest failed route is recorded and shown to the operator,
+  but never fed back into decisions. Pairs that
   can't succeed retry forever, and timeouts leave no record at all. Per-hop fee
   exclusions are built but never reach the payment tool.
 - **Fees.** Advisory only, keyed by peer rather than channel, unaware of inbound

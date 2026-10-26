@@ -175,8 +175,10 @@ restart drops it.
   `ppm = round(1e6·fee/amount)` and the route's hops recorded in `liquidity`.
 - Failure: one row per run, and only when nothing moved and the last error is
   one of `rebalanceFeeTooHigh`, `failedToFindPath`, `unexpectedError`,
-  `unidentifiedError`. `min` holds the cheapest failed route's ppm and nothing
-  reads it. Timeouts and the other errors leave no row.
+  `unidentifiedError`. `min` holds the cheapest failed route's ppm, the price at
+  which a route existed. `jet rebalance-history` shows it to the operator as the
+  minimum max ppm needed, but no automated decision reads it. Timeouts and the
+  other errors leave no row.
 - Ends with `process.exit()`.
 
 ## 5. Fee analysis (api/analyze-fees.js)
