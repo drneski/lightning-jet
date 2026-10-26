@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -145,8 +146,59 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
+// OpenReadOnly opens an existing database for reading, as jet status, explain
+// and health do. It never creates, migrates or writes anything, so it works for
+// a user who may read the files but not write them, such as an operator in the
+// service's group.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	q := url.Values{}
+	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "query_only(1)")
+	q.Set("mode", "ro")
+	if _, err := os.Stat(path + "-wal"); errors.Is(err, fs.ErrNotExist) {
+		// No write-ahead log means no jet run has the database open, and
+		// the last one to close it folded the log in. SQLite would still
+		// create a log to read through, which a reader without write access
+		// can't, so read the file as it is. A jet run starting meanwhile
+		// writes to a new log, which this read doesn't see.
+		q.Set("immutable", "1")
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("store: opening %s: %w", path, err)
+	}
+	version, err := schemaVersion(ctx, db)
+	switch {
+	case err != nil:
+	case version < len(migrations):
+		err = fmt.Errorf("store: database schema %d is older than this Jet (%d); jet run upgrades it", version, len(migrations))
+	case version > len(migrations):
+		err = fmt.Errorf("store: database schema %d is newer than this Jet (%d)", version, len(migrations))
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
+
+// schemaVersion is the number of migrations applied, 0 for a new database.
+func schemaVersion(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (int, error) {
+	var version int
+	err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&version)
+	if err != nil && !isMissingTable(err) && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("store: reading schema version: %w", err)
+	}
+	return version, nil
+}
 
 func (s *Store) migrate(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -154,10 +206,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	var version int
-	err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&version)
-	if err != nil && !isMissingTable(err) && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("store: reading schema version: %w", err)
+	version, err := schemaVersion(ctx, tx)
+	if err != nil {
+		return err
 	}
 	if version > len(migrations) {
 		return fmt.Errorf("store: database schema %d is newer than this Jet (%d)", version, len(migrations))
