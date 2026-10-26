@@ -194,3 +194,24 @@ func TestNewClientRejectsBadInputs(t *testing.T) {
 		t.Error("a missing address was accepted")
 	}
 }
+
+func TestNodeChannels(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/graph/node/"+peerPub || r.URL.Query().Get("include_channels") != "true" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, `{"node":{"pub_key":%q},"num_channels":1,"channels":[{"channel_id":"333","capacity":"2000000","node1_pub":%q,"node2_pub":%q,
+			"node1_policy":{"fee_base_msat":"1000","fee_rate_milli_msat":"250"},"node2_policy":null}]}`, peerPub, nodePub, peerPub)
+	})
+	edges, err := c.NodeChannels(context.Background(), peerPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edges) != 1 || edges[0].ChanID != 333 || edges[0].CapacitySat != 2000000 || edges[0].Node1Policy.FeeRateMilliMsat != 250 {
+		t.Errorf("edges = %+v", edges)
+	}
+	if _, err := c.NodeChannels(context.Background(), "../getinfo"); err == nil {
+		t.Error("a path that is not a pubkey was requested")
+	}
+}

@@ -206,22 +206,57 @@ func (p *wirePolicy) policy() *RoutingPolicy {
 	}
 }
 
+type wireEdge struct {
+	ChannelID   wireUint    `json:"channel_id"`
+	Capacity    wireInt     `json:"capacity"`
+	Node1Pub    string      `json:"node1_pub"`
+	Node2Pub    string      `json:"node2_pub"`
+	Node1Policy *wirePolicy `json:"node1_policy"`
+	Node2Policy *wirePolicy `json:"node2_policy"`
+}
+
+func (w wireEdge) edge() Edge {
+	return Edge{
+		ChanID: contracts.ChanID(w.ChannelID), CapacitySat: int64(w.Capacity), Node1Pub: w.Node1Pub, Node2Pub: w.Node2Pub,
+		Node1Policy: w.Node1Policy.policy(), Node2Policy: w.Node2Policy.policy(),
+	}
+}
+
 // GetChanInfo implements Reader.
 func (c *Client) GetChanInfo(ctx context.Context, id contracts.ChanID) (Edge, error) {
-	var r struct {
-		ChannelID   wireUint    `json:"channel_id"`
-		Node1Pub    string      `json:"node1_pub"`
-		Node2Pub    string      `json:"node2_pub"`
-		Node1Policy *wirePolicy `json:"node1_policy"`
-		Node2Policy *wirePolicy `json:"node2_policy"`
-	}
+	var r wireEdge
 	if err := c.do(ctx, http.MethodGet, "/v1/graph/edge/"+id.String(), nil, &r); err != nil {
 		return Edge{}, err
 	}
-	return Edge{
-		ChanID: contracts.ChanID(r.ChannelID), Node1Pub: r.Node1Pub, Node2Pub: r.Node2Pub,
-		Node1Policy: r.Node1Policy.policy(), Node2Policy: r.Node2Policy.policy(),
-	}, nil
+	return r.edge(), nil
+}
+
+// NodeChannels implements Reader.
+func (c *Client) NodeChannels(ctx context.Context, pubkey string) ([]Edge, error) {
+	if !isHexPubkey(pubkey) {
+		return nil, fmt.Errorf("lnd: %q is not a node public key", pubkey)
+	}
+	var r struct {
+		Channels []wireEdge `json:"channels"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v1/graph/node/"+pubkey+"?include_channels=true", nil, &r); err != nil {
+		return nil, err
+	}
+	out := make([]Edge, 0, len(r.Channels))
+	for _, e := range r.Channels {
+		out = append(out, e.edge())
+	}
+	return out, nil
+}
+
+// isHexPubkey reports whether s is a compressed public key in hex, so it is
+// safe to put in a URL path.
+func isHexPubkey(s string) bool {
+	if len(s) != 66 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // ForwardingHistory implements Reader.

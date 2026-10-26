@@ -21,6 +21,7 @@ type Fake struct {
 	Channels      []lnd.Channel
 	Edges         map[contracts.ChanID]lnd.Edge
 	Forwards      []lnd.Forward
+	NodeEdges     map[string][]lnd.Edge
 	HtlcEvents    []lnd.HtlcEvent
 	ChannelEvents []lnd.ChannelEvent
 	StreamEnd     error
@@ -79,6 +80,14 @@ func (f *Fake) ForwardingHistory(ctx context.Context, start, end time.Time) ([]l
 		}
 	}
 	return out, ctx.Err()
+}
+
+// NodeChannels implements lnd.Reader.
+func (f *Fake) NodeChannels(ctx context.Context, pubkey string) ([]lnd.Edge, error) {
+	if err := f.fail("NodeChannels"); err != nil {
+		return nil, err
+	}
+	return append([]lnd.Edge(nil), f.NodeEdges[pubkey]...), ctx.Err()
 }
 
 // SubscribeHtlcEvents implements lnd.Streamer.

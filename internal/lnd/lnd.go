@@ -37,6 +37,7 @@ type Channel struct {
 // A policy is nil until it has been gossiped.
 type Edge struct {
 	ChanID      contracts.ChanID
+	CapacitySat int64
 	Node1Pub    string
 	Node2Pub    string
 	Node1Policy *RoutingPolicy
@@ -73,4 +74,6 @@ type Reader interface {
 	// ForwardingHistory returns every forward in [start, end), across as many
 	// pages as LND needs.
 	ForwardingHistory(ctx context.Context, start, end time.Time) ([]Forward, error)
+	// NodeChannels returns a node's public channels as the graph knows them.
+	NodeChannels(ctx context.Context, pubkey string) ([]Edge, error)
 }
