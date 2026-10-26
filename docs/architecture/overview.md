@@ -377,12 +377,15 @@ file; there is no install script.
 cmd/jet/            CLI and daemon
 internal/
   contracts/        snapshot, estimate, intent, abstention and decision records
+  ids/              UUIDv7 identifiers
+  observe/          snapshots of the node, with data quality per channel
   economics/        estimators: demand, replacement cost, value of liquidity
   strategy/         fee and rebalance strategies
   limits/           deterministic authorization
-  engine/           scheduler and the decision pipeline
+  engine/           the decision cycle and its schedule
   explain/          renders recorded decisions
-  lnd/              generated LND client code, read and act clients, a fake LND
+  lnd/              LND's REST API: a read client now, an act client later;
+                    lndtest/ is a fake LND for tests
   store/            SQLite schema, migrations, queries
   control/          the local socket the CLI uses to reach the daemon
   web/              the local web view (later)
@@ -401,9 +404,21 @@ Go:
 - the language of the LND ecosystem.
 
 The module is `github.com/drneski/lightning-jet/v2`. SQLite comes from
-`modernc.org/sqlite`, pure Go, so builds need no C toolchain. LND client code is
-generated from pinned `.proto` files rather than importing LND's own Go
-packages, which would bring in all of LND.
+`modernc.org/sqlite`, pure Go, so builds need no C toolchain. It is the only
+dependency, and with what it brings, ten modules are compiled into the binary.
+
+**LND over REST, with the standard library** (decided 25 October). Jet reaches
+LND through its REST API:
+- TLS pinned to LND's certificate, with redirects refused and no proxy;
+- the macaroon in a header;
+- a deadline on every call;
+- hand-written types for the calls Jet uses, tested against synthetic LND
+  responses.
+
+There is no gRPC, protobuf or code generation, and LND's own Go packages are
+not imported. The RPCs and macaroons are the same as gRPC's. LND serves REST
+through its gRPC server, so Foundry's middleware applies to REST calls as well;
+Foundry's Policy tests should confirm that before managed mode.
 
 ## Testing and evaluation
 
@@ -519,7 +534,7 @@ the node's local data directory.
 
 **Settled:**
 
-- **Runtime:** Go.
+- **Runtime:** Go, reaching LND over REST with the standard library.
 - **Repository:** this one, keeping its name. 2.0 is built on `v2`, and 1.7 stays
   on `main` until launch.
 - **AI-native:**

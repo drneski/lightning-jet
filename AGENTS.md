@@ -26,9 +26,10 @@ Read these first:
 - **Read a file before editing it.** Edit what is on disk, not what you assume.
 - **Every dependency must justify its existence.** A new module needs a written
   reason in the pull request, and `go.sum` pins its hash. Prefer the standard
-  library, and prefer copying twenty lines over adding a module. Never import
-  LND's own Go packages; LND client code is generated from pinned `.proto`
-  files.
+  library, and prefer copying twenty lines over adding a module.
+- **LND over REST, with the standard library.** Don't add gRPC, protobuf, code
+  generation or LND's own Go packages. A new LND call gets a hand-written type
+  and a test against a synthetic LND response.
 - **No cgo.** Everything builds with `CGO_ENABLED=0` for the platforms nodes run
   on.
 - **The core makes no outbound connections beyond the node's own LND.** Optional
