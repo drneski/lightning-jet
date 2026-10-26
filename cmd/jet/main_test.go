@@ -195,6 +195,30 @@ func TestRunStatusExplainEndToEnd(t *testing.T) {
 	if code, _, stderr := jet("explain", "--data-dir", dataDir, "42"); code != 1 || !strings.Contains(stderr, "no decision recorded") {
 		t.Errorf("unknown channel: exit %d, %q", code, stderr)
 	}
+
+	// An operator in the service's group may read the database but not write
+	// it, and status works for them. One outside it is told what is missing.
+	if os.Geteuid() == 0 {
+		return // file permissions don't bind root
+	}
+	files, _ := filepath.Glob(filepath.Join(dataDir, "*"))
+	for _, f := range files {
+		os.Chmod(f, 0o440)
+	}
+	os.Chmod(dataDir, 0o550)
+	t.Cleanup(func() {
+		os.Chmod(dataDir, 0o700)
+		for _, f := range files {
+			os.Chmod(f, 0o600)
+		}
+	})
+	if code, _, stderr := jet("status", "--data-dir", dataDir); code != 0 {
+		t.Errorf("status without write access: exit %d: %s", code, stderr)
+	}
+	os.Chmod(dataDir, 0)
+	if code, _, stderr := jet("status", "--data-dir", dataDir); code != 1 || !strings.Contains(stderr, "needs read access") {
+		t.Errorf("status without read access: exit %d, %q", code, stderr)
+	}
 }
 
 func TestDaemonRecordsStreamsAndReportsHealth(t *testing.T) {

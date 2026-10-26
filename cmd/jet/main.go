@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -432,10 +433,17 @@ func cmdHealth(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	return nil
 }
 
-// openExisting opens the database without creating one where none exists.
+// openExisting opens the database read-only, so jet status, explain and health
+// need only read access to it and never change it.
 func openExisting(ctx context.Context, path string) (*store.Store, error) {
-	if _, err := os.Stat(path); err != nil {
+	_, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return nil, fmt.Errorf("no database at %s; run jet run first", path)
+	case errors.Is(err, fs.ErrPermission):
+		return nil, fmt.Errorf("%w; your user needs read access to Jet's database", err)
+	case err != nil:
+		return nil, err
 	}
-	return store.Open(ctx, path)
+	return store.OpenReadOnly(ctx, path)
 }
