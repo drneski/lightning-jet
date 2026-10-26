@@ -156,30 +156,78 @@ restart drops it.
 
 ## 4. One rebalance (api/rebalance.js + bos/rebalance.js)
 
-- Resolves `from`/`to` (alias fragment, pubkey or tag) and inserts an
-  `active_rebalance` row keyed by pid, deleted at the end.
-- Runs up to `maxTime` (30 min) in at most `REPS` = 2 rounds, calling bos
-  `manageRebalance` with `out_through`, `in_through`, `max_fee`,
-  `max_fee_rate` = ppm, `max_rebalance`, `timeout_minutes` = time left, and
-  `avoid` = `config.avoid` plus `rebalance_avoid` rows for this pair learned at
-  a max ppm ≥ the current one within the last `max(60, 5·maxTime)` min.
-- Per-hop limit `min(350, 0.75·ppm)`. "Aggressive mode", which avoids the most
-  expensive hop at once, is on whenever the run's time limit is under 60 min,
-  as the default 30 is.
-- bos reports through a logger object whose lines Jet parses. On "fee too
-  high" Jet records every hop of the probed route in `liquidity`, then avoids
-  the most expensive hop for the pair (`rebalance_avoid`). The `FEE_RATE>…`
-  per-hop strings it builds (rebalance.js:343, 358) never reach bos: only
-  `Object.keys(avoidNodes)` is passed (rebalance.js:254).
-- Success: one `rebalance_history` row per successful iteration with
-  `ppm = round(1e6·fee/amount)` and the route's hops recorded in `liquidity`.
-- Failure: one row per run, and only when nothing moved and the last error is
-  one of `rebalanceFeeTooHigh`, `failedToFindPath`, `unexpectedError`,
-  `unidentifiedError`. `min` holds the cheapest failed route's ppm, the price at
-  which a route existed. `jet rebalance-history` shows it to the operator as the
-  minimum max ppm needed, but no automated decision reads it. Timeouts and the
-  other errors leave no row.
-- Ends with `process.exit()`.
+A run explores routes under a budget and learns which nodes to avoid as it goes.
+
+**Setup.**
+
+- Resolves `from` and `to` by pubkey or by a unique alias fragment. bos tags are
+  disabled (`api/tags.js` exports `{}`).
+- **A feasibility check comes first** (api/rebalance.js:85). If the target
+  peer's fee toward us (`base/1000 + rate`, from the last matching channel)
+  already exceeds the budget ppm, the run stops before trying anything. Within
+  25% of the budget it warns that the margin may be too thin.
+- **The budget** is `max_fee = amount·ppm/1e6`, recomputed from the remaining
+  amount at each iteration. The per-hop limit is `min(350, 0.75·ppm)`.
+- **The avoid list** is `config.avoid` plus `rebalance_avoid` rows for this pair
+  that were learned at a max ppm at or above this run's, within the last
+  `max(60, 5·maxTime)` min. Learned exclusions are scoped to the pair and the
+  budget, and they expire.
+- Inserts an `active_rebalance` row keyed by pid.
+- **Mode.** "Aggressive" when the time limit is under 60 min, as the default 30
+  is; "patient" otherwise.
+
+**The loop** runs until time is up (`maxTime`, default 30 min), the target is
+met, or an error ends it. Each iteration calls bos `manageRebalance` with
+`out_through`, `in_through`, `max_fee`, `max_fee_rate` = ppm, `max_rebalance` =
+the remaining amount, `timeout_minutes` = the time left, and `avoid`. bos
+reports each probed route through a logger callback, and Jet keeps per-node
+statistics of the ppm it sees.
+
+- **Fee too high** (bos found a route, over budget):
+  - Every hop of that route goes into `liquidity`: it had the liquidity, at
+    that price.
+  - The route's cumulative ppm updates the run's cheapest failed price (`min`).
+  - Jet picks the costliest hop it may avoid (never an endpoint or a node
+    already avoided):
+    - If that hop is above the per-hop limit, aggressive mode avoids it at
+      once and remembers it for the pair (`rebalance_avoid`).
+    - Patient mode avoids it only once it has been seen at least four times
+      (`MIN_PPMS_TRIES`) with an average above the limit. Until then it tries to
+      skip just that hop.
+    - If that hop is at or under the limit, the route is expensive in sum with
+      no single expensive hop, and Jet tries to skip just that hop.
+  - Skipping a hop means a `FEE_RATE>…` avoid string, which never reaches bos
+    (rebalance.js:343, 358), since only node ids are passed (rebalance.js:254).
+    So the next call sees the same route, finds the hop already skipped, and
+    ends the run.
+- **No path found:** a last-ditch widening. Jet avoids every node it has seen
+  averaging above the per-hop limit and tries again. If there are none, it counts
+  a retry.
+- **Errors that end the run:**
+  - amount too low;
+  - peer not found;
+  - no outbound peer with enough balance;
+  - probe timeout;
+  - an amount bos can't parse;
+  - unexpected and unidentified errors.
+- **Success may be partial.** Each one adds a `rebalance_history` row with
+  `ppm = round(1e6·fee/amount)` and records the route's hops in `liquidity`.
+  The loop continues until it is within 50,000 sats of the target.
+- `REPS` = 2 bounds only retries that made no progress (nothing left to
+  exclude). Exclusions and successes don't count against it, so a run is bounded
+  by its time limit.
+
+**The end.**
+
+- **A failure row,** one per run, is written only when nothing moved and the last
+  error is one of `rebalanceFeeTooHigh`, `failedToFindPath`, `unexpectedError`
+  or `unidentifiedError`. `min` holds the cheapest failed route's ppm, the price
+  at which a route existed. `jet rebalance-history` shows it to the operator as
+  the minimum max ppm needed, but no automated decision reads it. Timeouts and
+  the other errors leave no row.
+- **A summary is logged:** the nodes seen above and below the per-hop limit,
+  with the ppms observed.
+- The run deletes its active row and ends with `process.exit()`.
 
 ## 5. Fee analysis (api/analyze-fees.js)
 
@@ -328,8 +376,19 @@ Everything else (`status`, `peers`, `fees`, `analyze-fees`, `stats`,
 - **bos debug callbacks** reference an undefined variable:
   `args.logger.debug(debug)` (bos/rebalance.js:59, bos/pay.js:53). It throws
   whenever bos logs at debug level.
-- **Per-hop fee skips never reach bos** (api/rebalance.js:254): a run can
-  retry the same expensive route.
+- **Per-hop fee skips never reach bos** (api/rebalance.js:254). When the
+  costliest hop is within the per-hop limit, the run repeats the same route once
+  and ends, instead of exploring further (§4).
+- **A run's closing summary can crash it** (api/rebalance.js:543–544). It reads
+  node info without a guard, outside the error handling, so a node missing from
+  the graph aborts the run before it deletes its active row. The worker removes
+  the row within a minute.
+- **The feasibility check leaves no trace** (api/rebalance.js:88–89). A run that
+  stops there writes neither an active row nor history, so nothing backs off
+  from it. Fee analysis normally keeps the rebalancer from planning such a run,
+  so in practice this affects manual `jet rebalance`.
+- **Dead code:** `routes` (api/rebalance.js:102) is never filled, so the
+  summary's routes list is always empty.
 - **Sizing ignores the queue** (service/rebalancer.js:650, and
   service/queue.js:34, which nothing calls). One target can be promised refills
   from several sources at once, each sized against the same balance (§3.3).
