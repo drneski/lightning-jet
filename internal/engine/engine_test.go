@@ -13,6 +13,7 @@ import (
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
 	"github.com/drneski/lightning-jet/v2/internal/economics"
+	"github.com/drneski/lightning-jet/v2/internal/health"
 	"github.com/drneski/lightning-jet/v2/internal/ids"
 	"github.com/drneski/lightning-jet/v2/internal/limits"
 	"github.com/drneski/lightning-jet/v2/internal/lnd"
@@ -186,6 +187,22 @@ func TestRunStopsWhenCanceled(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		if v, err := st.Meta(context.Background(), health.KeyCycleOK); err == nil && v != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no heartbeat was recorded")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if v, _ := st.Meta(context.Background(), health.KeyInterval); v != "3600000" {
+		t.Errorf("interval heartbeat = %q", v)
+	}
+	if e.Stuck(c.now(), time.Minute) {
+		t.Error("an idle engine reports itself stuck")
+	}
 	cancel()
 	select {
 	case err := <-done:
@@ -194,5 +211,17 @@ func TestRunStopsWhenCanceled(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run did not stop after cancellation")
+	}
+}
+
+func TestStuckOnlyWhileACycleRunsTooLong(t *testing.T) {
+	c := &clock{time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)}
+	e, _ := newEngine(t, fakeNode(c.t), c)
+	e.busySince.Store(c.t.UnixMilli())
+	if e.Stuck(c.t.Add(time.Minute), 15*time.Minute) {
+		t.Error("a one-minute cycle is reported stuck")
+	}
+	if !e.Stuck(c.t.Add(16*time.Minute), 15*time.Minute) {
+		t.Error("a sixteen-minute cycle is not reported stuck")
 	}
 }

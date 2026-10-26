@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
 	"github.com/drneski/lightning-jet/v2/internal/economics"
+	"github.com/drneski/lightning-jet/v2/internal/health"
 	"github.com/drneski/lightning-jet/v2/internal/limits"
 	"github.com/drneski/lightning-jet/v2/internal/observe"
 	"github.com/drneski/lightning-jet/v2/internal/store"
@@ -28,6 +31,15 @@ type Engine struct {
 	Now        func() time.Time
 	NewID      func() string
 	Log        *slog.Logger
+
+	busySince atomic.Int64 // Unix ms when the running cycle began; 0 between cycles
+}
+
+// Stuck reports whether a cycle has been running longer than limit, which no
+// healthy cycle does: every call to LND has its own deadline.
+func (e *Engine) Stuck(now time.Time, limit time.Duration) bool {
+	b := e.busySince.Load()
+	return b != 0 && now.Sub(time.UnixMilli(b)) > limit
 }
 
 // Summary is what one cycle did.
@@ -96,6 +108,7 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) error {
 	if e.Strategy.Mode == contracts.ModeLive || e.Authorizer.FeesMode == contracts.ModeLive {
 		return ErrLiveUnsupported
 	}
+	e.heartbeat(ctx, health.KeyInterval, interval.Milliseconds())
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -106,17 +119,30 @@ func (e *Engine) Run(ctx context.Context, interval time.Duration) error {
 		case <-timer.C:
 		}
 		began := e.Now()
+		e.busySince.Store(began.UnixMilli())
 		sum, err := e.Cycle(ctx)
+		e.busySince.Store(0)
 		switch {
 		case ctx.Err() != nil:
 			e.Log.Info("cycle interrupted by shutdown; nothing from it was recorded")
 		case err != nil:
 			e.Log.Error("cycle failed; nothing from it was recorded", "err", err)
+			e.heartbeat(ctx, health.KeyCycleFail, e.Now().UnixMilli())
+			if serr := e.Store.SetMeta(ctx, health.KeyCycleErr, err.Error()); serr != nil {
+				e.Log.Error("recording the failure", "err", serr)
+			}
 		default:
+			e.heartbeat(ctx, health.KeyCycleOK, e.Now().UnixMilli())
 			e.Log.Info("cycle recorded", "snapshot", sum.SnapshotID, "channels", sum.Channels,
 				"intents", sum.Intents, "approved", sum.Approved, "rejected", sum.Rejected,
 				"abstentions", sum.Abstentions, "took", e.Now().Sub(began).Round(time.Millisecond))
 		}
 		timer.Reset(interval)
+	}
+}
+
+func (e *Engine) heartbeat(ctx context.Context, key string, v int64) {
+	if err := e.Store.SetMeta(ctx, key, strconv.FormatInt(v, 10)); err != nil {
+		e.Log.Error("recording a heartbeat", "key", key, "err", err)
 	}
 }
