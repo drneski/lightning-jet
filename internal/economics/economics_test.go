@@ -98,3 +98,26 @@ func TestBrandNewChannelHasNoForecast(t *testing.T) {
 		t.Errorf("a 10-hour-old channel has confidence %s", est.EconomicConfidence.Level)
 	}
 }
+
+func TestFailuresAndCompetitionBecomeEvidence(t *testing.T) {
+	ch := channel(12, 6_000_000)
+	ch.Failures = &contracts.Failures{WindowHours: 720, CoverageHours: 48, BalanceFailures: 5, BalanceFailuresMsat: 1_250_000_000}
+	ch.Competition = &contracts.Competition{Channels: 40, FeePPMP25: 150, FeePPMMedian: 300, FeePPMP75: 600}
+	est := estimator().OutboundRevenue(snapshot(), ch)
+	if len(est.Evidence) != 3 {
+		t.Fatalf("evidence = %+v", est.Evidence)
+	}
+	fail, comp := est.Evidence[1], est.Evidence[2]
+	if fail.Kind != "failed_for_balance" || fail.Count != 5 || fail.Prior || fail.Source != "jet.htlc_stream" ||
+		fail.Summary != "5 forwards failed for lack of balance, 1250000 sats attempted, recorded for 48 of 720 hours; attempts, not payments" {
+		t.Errorf("failure evidence = %+v", fail)
+	}
+	if comp.Kind != "competing_fees" || !comp.Prior || comp.Count != 40 || comp.Source != "lnd.graph.node" ||
+		comp.Summary != "40 other channels into the peer advertise 150-600 ppm (median 300)" {
+		t.Errorf("competition evidence = %+v", comp)
+	}
+	// Evidence informs; the baseline forecast is unchanged.
+	if *est.ExpectedMsat != 2_800_000 {
+		t.Errorf("expected = %d", *est.ExpectedMsat)
+	}
+}

@@ -14,7 +14,7 @@ import (
 // The estimator's identity, recorded on every estimate it makes.
 const (
 	EstimatorName    = "flow"
-	EstimatorVersion = "0.1.0"
+	EstimatorVersion = "0.2.0"
 )
 
 // KindOutboundRevenue is the routing revenue a channel's outbound liquidity is
@@ -90,6 +90,21 @@ func (e *Estimator) OutboundRevenue(snap *contracts.Snapshot, ch contracts.Chann
 			"our fee policy stays as it is",
 			"revenue per forward stays near its observed average",
 		},
+	}
+
+	if f := ch.Failures; f != nil {
+		est.Evidence = append(est.Evidence, contracts.Evidence{
+			Kind: "failed_for_balance", WindowHours: f.WindowHours, Count: f.BalanceFailures, Source: "jet.htlc_stream",
+			Summary: fmt.Sprintf("%d forwards failed for lack of balance, %d sats attempted, recorded for %d of %d hours; attempts, not payments",
+				f.BalanceFailures, f.BalanceFailuresMsat.Sats(), f.CoverageHours, f.WindowHours),
+		})
+	}
+	if c := ch.Competition; c != nil && c.Channels > 0 {
+		est.Evidence = append(est.Evidence, contracts.Evidence{
+			Kind: "competing_fees", Count: c.Channels, Source: "lnd.graph.node", Prior: true,
+			Summary: fmt.Sprintf("%d other channels into the peer advertise %d-%d ppm (median %d)",
+				c.Channels, c.FeePPMP25, c.FeePPMP75, c.FeePPMMedian),
+		})
 	}
 
 	basis := fmt.Sprintf("%d outbound forwards in %d hours", n, window)
