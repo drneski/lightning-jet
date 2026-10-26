@@ -35,6 +35,23 @@ leaves fees to the operator.
 - The measured cost of each refill, per channel, from LND's payments.
 - Hop prices discovered while probing routes.
 
+**Ideas worth keeping.** 1.7's rebalancer was hand-built and novel in several
+ways, and most of its ideas carry into 2.0, rebuilt on per-channel economics.
+The full list is in the
+[1.7 reference](../reference/jet-1.7-internals.md#13-design-ideas-worth-keeping).
+
+- Liquidity sized to each channel's observed flow, not a fixed half.
+- A portfolio of strategies (regular, missed demand, just-in-time
+  replenishment, idle-channel revival) sharing one slot limit, with quotas so no
+  single signal takes over.
+- Guards before acting: pending HTLCs, fee anomalies, in-flight accounting,
+  one run per pair, exponential backoff, and a daily ceiling that fails closed.
+- A route search that explores under a budget. It excludes the costliest hop,
+  is more patient when it has more time, and remembers exclusions per pair and
+  per budget, with expiry.
+- Every probed hop recorded as a liquidity sighting, and the cheapest failed
+  price kept as the price that would have worked.
+
 **Design problems not to repeat:**
 
 - **Units.** Channels are classified one by one, but every rebalance names two

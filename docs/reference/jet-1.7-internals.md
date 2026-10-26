@@ -419,7 +419,39 @@ Everything else (`status`, `peers`, `fees`, `analyze-fees`, `stats`,
 - Already in 1.7's `BACKLOG.md`: `recordLiquidity` collisions (21), and
   timed-out runs leave no history (24).
 
-## 13. What this means for 2.0
+## 13. Design ideas worth keeping
+
+1.7's rebalancer was built by hand, and much of it was new when it was written:
+- liquidity sized to observed flow;
+- failed forwards used as a demand signal;
+- a portfolio of strategies under one slot limit;
+- a route search that learns what to avoid.
+
+Most of these ideas carry into 2.0. What changes is the unit (channel instead
+of peer) and the judge (economic value instead of availability).
+
+| Idea | In 1.7 | In 2.0 |
+|---|---|---|
+| **Liquidity sized to observed flow** | Targets get `min(split·capacity, outflow_1d)` local, and sources keep room for `inflow_1d` (§3.2). Channels hold what they actually route, not a fixed half. | The flow-based target is the baseline that the marginal-value model refines. The in/out ratio feeds reuse. |
+| **Direction from routing share, with a two-way split** | Channels at 1% or more of node-wide inbound or outbound volume are inbound or outbound. Two-way channels take their dominant side and a `split` that scales their target (§3.1). | A per-channel flow profile (in, out, ratio) instead of a class label. |
+| **A portfolio of strategies with quotas** | Regular, missed, forward and low-volume refills share one slot limit. Missed and forward are capped at a quarter each, so no single signal takes over, and the order encodes priority (§3.3). | Versioned strategies with their own budgets under one limits layer. |
+| **Failed forwards as a demand signal** | Channels whose failed-for-balance HTLCs in a day exceed their capacity become refill targets (§3.2). | Kept as an opportunity indicator, deduplicated and with confidence. |
+| **Just-in-time replenishment** | A forward of 50,000 sats or more triggers a refill of the same amount, so the channel is ready for the next payment of that size (§3.3). | A strategy gated by value: refill when the cost is below the expected revenue of the next such forward. |
+| **Conservative revival of idle channels** | Low-volume channels get a floor of `min(1M, 20%·capacity)`, funded only from other idle channels' surplus above 1M, never from busy sources (§3.2). | Opt-in, with its own small budget. |
+| **Allocation by priority** | Target *i* of *n* draws `(n−i)/n` of each source's surplus, so higher-priority targets get larger shares (§3.3). | Allocation across targets by marginal value. |
+| **Staggered starts** | Target *i* starts `60·i` s after the first, so earlier results land before later ones and load spreads out (§3.3). | Kept in durable job scheduling. |
+| **One run per pair, with exponential backoff** | A pair never has two runs at once, and consecutive failures double the wait (§3.4). | Kept per channel, with timeouts counting too. |
+| **Guards before acting** | Skip channels with 4 or more pending HTLCs. Pause when fees show the operator is accumulating, or the peer's fee is anomalous. Count in-flight sats from both pending HTLCs and running rebalances. Excludes are directional (§3, §5). | Rules in the limits layer and the strategies. |
+| **A daily ceiling that fails closed** | Each run counts at its maximum fee, including runs not yet registered, and a fee that can't be computed blocks the run (§3.5). | The loss ceilings, with reservations made before execution. |
+| **Feasibility before effort** | A refill whose last hop alone costs more than the budget isn't attempted (§4). | Replacement cost never starts below the peer's fee. |
+| **Exploration under a budget** | Probe, find the costliest avoidable hop, exclude it, probe again. Widen the exclusions when no path is found (§4). | `QueryRoutes` with ignore lists and mission control, with costs learned per edge across runs. |
+| **Patience tied to time** | Short runs exclude a node at first sight. Long runs wait for four sightings averaging above the limit, so a node gets chances to prove it isn't expensive (§4). | A tunable exploration setting. |
+| **Scoped negative knowledge** | Exclusions are remembered per pair, apply only to budgets at or below the one they were learned under, and expire (§4). | Generalized by per-edge cost estimates with confidence and freshness. |
+| **Liquidity sightings** | Every hop on a probed route is recorded as having had liquidity at a price. `jet probes` turns that into prospects for new channels (§4). | Market data for topology decisions later. |
+| **Partial progress** | A run accepts partial refills and keeps going toward the target within its time (§4). | Attempts under one intent, inside its limits. |
+| **The price that would have worked** | The cheapest failed route is kept and shown as the minimum ppm needed (§4). | An input to replacement cost. |
+
+## 14. What this means for 2.0
 
 The detail behind each point is above. The design response is in the
 [architecture overview](../architecture/overview.md).
