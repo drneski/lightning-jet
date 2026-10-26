@@ -246,42 +246,43 @@ alters the JSON or adds facts that aren't in it.
 
 ## Example
 
-A synthetic quiet channel. Its data is good, but it has too little history to
-forecast whether a lower fee would earn more, so the strategy abstains.
+A synthetic quiet channel. Its data is good, but three forwards in a month are
+too few to measure a fee experiment against, so the strategy abstains.
 
 ```json
 {
-  "schema": "jet.abstention/1",
   "id": "01a17581-c000-7d1a-99b6-e2f0c1d3e4a5",
+  "schema": "jet.abstention/1",
   "chan_id": "111111111111111111",
   "strategy": {"name": "fee.balance-band", "version": "0.1.0"},
   "snapshot_id": "01a17581-b830-7c3b-98d2-e6a4b5c6d7e8",
   "estimate_ids": ["01a17581-bc18-7e4c-99f1-a3b2c4d5e6f7"],
   "reason": "insufficient_evidence",
-  "detail": "outbound_liquidity_value has economic confidence low (3 outbound forwards in 30 days); this strategy needs medium",
-  "would_change_if": [
-    "at least 10 outbound forwards through this channel within 30 days",
-    "a fee experiment is authorized for this channel"
-  ],
-  "revisit_at": "2026-11-02T00:00:00.000Z",
-  "created_at": "2026-10-26T00:00:00.000Z"
+  "detail": "outbound_revenue has economic confidence low (3 outbound forwards in 720 hours); this strategy needs medium",
+  "would_change_if": ["at least 10 outbound forwards through this channel within 30 days"],
+  "revisit_at": "2026-10-26T01:00:00Z",
+  "created_at": "2026-10-26T00:00:00Z"
 }
 ```
 
 ```
 $ jet explain 111111111111111111
+Channel 111111111111111111 with 03bbbbbbbbbbbbbb…
+
 Observed    2026-10-26 00:00 UTC. Local 4,500,000 sats of 5,000,000 (90%).
-            Our fee: base 0, 500 ppm. Peer's fee to us: base 0, 400 ppm.
-            30 days: 3 forwards out, 0 failed for balance.
-            Data quality: good (balances 2 min old, policies current, history complete).
-Estimated   Outbound liquidity value, 14 days: +40 sats expected, -150 to +600 (p10-p90).
-            Economic confidence: low (3 forwards in 30 days); this strategy needs medium.
-            Gossip prior: similar routes advertise 200-350 ppm (a prior, not a price).
-Proposed    Nothing. Insufficient evidence to forecast whether a lower fee earns more.
+            Our fee: base 0 msat, 500 ppm. Peer's fee to us: base 0 msat, 400 ppm.
+            30 days: 3 forwards out, earning 150 sats; 1 in.
+            Data quality: good.
+Estimated   Outbound revenue, 14 days: 70 sats expected, 18 to 121 (p10-p90).
+            Economic confidence: low (3 outbound forwards in 720 hours).
+Proposed    Nothing (insufficient evidence): outbound_revenue has economic confidence low (3 outbound forwards in 720 hours); this strategy needs medium.
 Decided     No intent, so no authorization.
-Next        Evaluated again 2026-11-02. Would act with at least 10 outbound forwards
-            in 30 days, or if a fee experiment is authorized for this channel.
+Next        Evaluated again 2026-10-26 01:00 UTC.
+            Would act if at least 10 outbound forwards through this channel within 30 days.
 ```
+
+The text is presentation; `jet explain --json` is the contract. The explain
+package's tests check this exact output.
 
 ## Out of scope
 
