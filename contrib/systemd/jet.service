@@ -2,9 +2,9 @@
 #
 # Jet runs as a fresh unprivileged user, sees a read-only file system apart
 # from its own state directory, and can reach only this machine. Home
-# directories are replaced by an empty tmpfs; the drop-in in jet.service.d/
-# binds LND's tls.cert and readonly.macaroon back in, read-only, and nothing
-# else of LND's. See README.md.
+# directories are inaccessible. The drop-in in jet.service.d/ binds LND's
+# tls.cert and readonly.macaroon into /run/lightning-jet, read-only, and
+# nothing else of LND's. See README.md.
 
 [Unit]
 Description=Lightning Jet 2.0 (read-only, shadow mode)
@@ -15,7 +15,9 @@ Wants=network-online.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/opt/lightning-jet/jet run --config /etc/lightning-jet/jet.conf --data-dir /var/lib/lightning-jet
+# The LND paths are where the drop-in binds the two files, so they override
+# any in jet.conf.
+ExecStart=/opt/lightning-jet/jet run --config /etc/lightning-jet/jet.conf --data-dir /var/lib/lightning-jet --tls-cert /run/lightning-jet/tls.cert --macaroon /run/lightning-jet/readonly.macaroon
 Restart=on-failure
 RestartSec=30s
 TimeoutStopSec=60s
@@ -28,9 +30,16 @@ DynamicUser=yes
 StateDirectory=lightning-jet
 StateDirectoryMode=0700
 ConfigurationDirectory=lightning-jet
+# Where the drop-in binds LND's files. It exists before the bind mounts are
+# made, so systemd needn't create directories for them, which under UMask=0077
+# Jet couldn't enter.
+RuntimeDirectory=lightning-jet
+RuntimeDirectoryMode=0700
 UMask=0077
 ProtectSystem=strict
-ProtectHome=tmpfs
+# Not tmpfs: with ProtectSystem=strict, systemd 241 (Debian 10, Umbrel) drops
+# ProtectHome=tmpfs and leaves the real /home visible.
+ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

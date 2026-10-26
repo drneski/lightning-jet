@@ -1,16 +1,20 @@
 # Drop-in for jet.service: the only LND files Jet may see. Install as
-# /etc/systemd/system/jet.service.d/lnd-paths.conf, with the paths of your
-# node, the same ones jet.conf names.
+# /etc/systemd/system/jet.service.d/lnd-paths.conf, with your node's paths on
+# the left of each colon. Keep the right side: jet.service passes those paths
+# to jet run.
 #
-# On Umbrel, LND lives under /home, which jet.service replaces with an empty
-# tmpfs, so binding the two files back in is all it takes:
+# A bound file keeps its own permissions, so Jet's user must be able to read
+# it: on Umbrel both are readable by any user. Elsewhere, add
+# SupplementaryGroups= with a group that can read them.
+#
+# On Umbrel, LND lives under /home, which jet.service makes inaccessible:
 [Service]
-BindReadOnlyPaths=/home/umbrel/umbrel/app-data/lightning/data/lnd/tls.cert
-BindReadOnlyPaths=/home/umbrel/umbrel/app-data/lightning/data/lnd/data/chain/bitcoin/mainnet/readonly.macaroon
+BindReadOnlyPaths=/home/umbrel/umbrel/app-data/lightning/data/lnd/tls.cert:/run/lightning-jet/tls.cert
+BindReadOnlyPaths=/home/umbrel/umbrel/app-data/lightning/data/lnd/data/chain/bitcoin/mainnet/readonly.macaroon:/run/lightning-jet/readonly.macaroon
 
-# If LND lives outside /home, say in /var/lib/lnd, hide its directory first,
-# then bind the two files back in:
+# If LND lives outside /home, say in /var/lib/lnd, make its directory
+# inaccessible too:
 #
-# TemporaryFileSystem=/var/lib/lnd:ro
-# BindReadOnlyPaths=/var/lib/lnd/tls.cert
-# BindReadOnlyPaths=/var/lib/lnd/data/chain/bitcoin/mainnet/readonly.macaroon
+# InaccessiblePaths=/var/lib/lnd
+# BindReadOnlyPaths=/var/lib/lnd/tls.cert:/run/lightning-jet/tls.cert
+# BindReadOnlyPaths=/var/lib/lnd/data/chain/bitcoin/mainnet/readonly.macaroon:/run/lightning-jet/readonly.macaroon
