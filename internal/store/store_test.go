@@ -211,3 +211,6 @@ func TestDirectoryIsOwnerOnly(t *testing.T) {
 		t.Errorf("data directory permissions = %o, want 700", perm)
 	}
 }
+
+func chanID(v uint64) contracts.ChanID { return contracts.ChanID(v) }
+func msat(v int64) contracts.MilliSat  { return contracts.MilliSat(v) }

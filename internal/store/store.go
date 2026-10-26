@@ -83,6 +83,43 @@ var migrations = []string{
 		record TEXT NOT NULL
 	);
 	CREATE INDEX outcomes_intent ON outcomes (intent_id, at);`,
+
+	`CREATE TABLE htlc_failures (
+		id INTEGER PRIMARY KEY,
+		at INTEGER NOT NULL,
+		kind TEXT NOT NULL,
+		event_type TEXT NOT NULL,
+		incoming_chan_id TEXT NOT NULL,
+		outgoing_chan_id TEXT NOT NULL,
+		incoming_htlc_id INTEGER NOT NULL,
+		outgoing_htlc_id INTEGER NOT NULL,
+		incoming_amt_msat INTEGER NOT NULL,
+		outgoing_amt_msat INTEGER NOT NULL,
+		incoming_timelock INTEGER NOT NULL,
+		outgoing_timelock INTEGER NOT NULL,
+		wire_failure TEXT NOT NULL,
+		failure_detail TEXT NOT NULL,
+		failure_string TEXT NOT NULL,
+		recorded_at INTEGER NOT NULL
+	);
+	CREATE INDEX htlc_failures_outgoing ON htlc_failures (outgoing_chan_id, at);
+	CREATE INDEX htlc_failures_at ON htlc_failures (at);
+	CREATE TABLE channel_events (
+		id INTEGER PRIMARY KEY,
+		at INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		channel_point TEXT NOT NULL,
+		chan_id TEXT
+	);
+	CREATE INDEX channel_events_point ON channel_events (channel_point, at);
+	CREATE TABLE stream_events (
+		id INTEGER PRIMARY KEY,
+		stream TEXT NOT NULL,
+		event TEXT NOT NULL,
+		at INTEGER NOT NULL,
+		detail TEXT NOT NULL
+	);
+	CREATE INDEX stream_events_stream ON stream_events (stream, at);`,
 }
 
 // Open opens or creates the database at path, creating its directory with
