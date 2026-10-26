@@ -138,3 +138,28 @@ func TestCommas(t *testing.T) {
 		}
 	}
 }
+
+func TestFailuresAndPriorsAreShown(t *testing.T) {
+	ev := abstentionEvaluation()
+	ch := &ev.Snapshot.Channels[0]
+	ch.Failures = &contracts.Failures{WindowHours: 720, CoverageHours: 48, BalanceFailures: 5, BalanceFailuresMsat: 1_250_000_000}
+	ev.Estimates[0].Evidence = []contracts.Evidence{
+		{Kind: "competing_fees", Prior: true, Count: 40, Summary: "40 other channels into the peer advertise 150-600 ppm (median 300)"},
+	}
+	x, err := Build(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := x.Text()
+	for _, want := range []string{
+		"Failed for lack of balance: 5 forwards, 1,250,000 sats attempted (recorded for 48 of 720 hours; attempts, not payments).",
+		"Prior: 40 other channels into the peer advertise 150-600 ppm (median 300) (a prior, not a price).",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	if x.Observed.Failures == nil {
+		t.Error("the JSON form has no failures")
+	}
+}

@@ -27,17 +27,19 @@ type Explanation struct {
 
 // Observed is the channel as the snapshot saw it.
 type Observed struct {
-	SnapshotID    string                `json:"snapshot_id"`
-	ContentSHA256 string                `json:"content_sha256"`
-	At            time.Time             `json:"at"`
-	Peer          string                `json:"peer"`
-	Active        bool                  `json:"active"`
-	CapacityMsat  contracts.MilliSat    `json:"capacity_msat"`
-	LocalMsat     contracts.MilliSat    `json:"local_msat"`
-	OurPolicy     *contracts.Policy     `json:"our_policy,omitempty"`
-	PeerPolicy    *contracts.Policy     `json:"peer_policy,omitempty"`
-	Forwards      contracts.Forwards    `json:"forwards"`
-	DataQuality   contracts.DataQuality `json:"data_quality"`
+	SnapshotID    string                 `json:"snapshot_id"`
+	ContentSHA256 string                 `json:"content_sha256"`
+	At            time.Time              `json:"at"`
+	Peer          string                 `json:"peer"`
+	Active        bool                   `json:"active"`
+	CapacityMsat  contracts.MilliSat     `json:"capacity_msat"`
+	LocalMsat     contracts.MilliSat     `json:"local_msat"`
+	OurPolicy     *contracts.Policy      `json:"our_policy,omitempty"`
+	PeerPolicy    *contracts.Policy      `json:"peer_policy,omitempty"`
+	Forwards      contracts.Forwards     `json:"forwards"`
+	Failures      *contracts.Failures    `json:"failures,omitempty"`
+	Competition   *contracts.Competition `json:"competition,omitempty"`
+	DataQuality   contracts.DataQuality  `json:"data_quality"`
 }
 
 // Proposed is the strategy's result: exactly one of an intent or an
@@ -81,7 +83,8 @@ func Build(ev *store.Evaluation) (*Explanation, error) {
 		Observed: Observed{
 			SnapshotID: ev.Snapshot.ID, ContentSHA256: ev.Snapshot.ContentSHA256, At: ev.Snapshot.TakenAt,
 			Peer: ch.Peer, Active: ch.Active, CapacityMsat: ch.CapacityMsat, LocalMsat: ch.LocalMsat,
-			OurPolicy: ch.OurPolicy, PeerPolicy: ch.PeerPolicy, Forwards: ch.Forwards, DataQuality: ch.DataQuality,
+			OurPolicy: ch.OurPolicy, PeerPolicy: ch.PeerPolicy, Forwards: ch.Forwards,
+			Failures: ch.Failures, Competition: ch.Competition, DataQuality: ch.DataQuality,
 		},
 		Estimated: ev.Estimates,
 		Proposed:  Proposed{Intent: ev.Intent, Abstention: ev.Abstention},
@@ -115,6 +118,10 @@ func (x *Explanation) Text() string {
 	more("Our fee: %s. Peer's fee to us: %s.", policy(o.OurPolicy), policy(o.PeerPolicy))
 	f := o.Forwards
 	more("%d days: %d forwards out, earning %s sats; %d in.", f.WindowHours/24, f.OutCount, commas(f.OutFeeMsat.Sats()), f.InCount)
+	if fl := o.Failures; fl != nil {
+		more("Failed for lack of balance: %d forwards, %s sats attempted (recorded for %d of %d hours; attempts, not payments).",
+			fl.BalanceFailures, commas(fl.BalanceFailuresMsat.Sats()), fl.CoverageHours, fl.WindowHours)
+	}
 	more("Data quality: %s.", quality(o.DataQuality))
 
 	for i, e := range x.Estimated {
@@ -131,6 +138,11 @@ func (x *Explanation) Text() string {
 				commas(e.ExpectedMsat.Sats()), commas(e.LowMsat.Sats()), commas(e.HighMsat.Sats()), e.Interval)
 		}
 		more("Economic confidence: %s (%s).", e.EconomicConfidence.Level, e.EconomicConfidence.Basis)
+		for _, ev := range e.Evidence {
+			if ev.Prior {
+				more("Prior: %s (a prior, not a price).", ev.Summary)
+			}
+		}
 	}
 
 	if a := x.Proposed.Abstention; a != nil {
