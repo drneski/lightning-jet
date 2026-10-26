@@ -11,17 +11,26 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/lnd"
 )
 
-// Fake is an in-memory Reader. A non-nil entry in Errors makes that method
-// fail with it.
+// Fake is an in-memory Reader and Streamer. A non-nil entry in Errors makes
+// that method fail with it.
+//
+// Each subscription delivers its events in order, then fails with
+// StreamEnd if set, or else waits for its context to end.
 type Fake struct {
-	Info     lnd.Info
-	Channels []lnd.Channel
-	Edges    map[contracts.ChanID]lnd.Edge
-	Forwards []lnd.Forward
-	Errors   map[string]error
+	Info          lnd.Info
+	Channels      []lnd.Channel
+	Edges         map[contracts.ChanID]lnd.Edge
+	Forwards      []lnd.Forward
+	HtlcEvents    []lnd.HtlcEvent
+	ChannelEvents []lnd.ChannelEvent
+	StreamEnd     error
+	Errors        map[string]error
 }
 
-var _ lnd.Reader = (*Fake)(nil)
+var (
+	_ lnd.Reader   = (*Fake)(nil)
+	_ lnd.Streamer = (*Fake)(nil)
+)
 
 func (f *Fake) fail(method string) error {
 	if err := f.Errors[method]; err != nil {
@@ -70,4 +79,38 @@ func (f *Fake) ForwardingHistory(ctx context.Context, start, end time.Time) ([]l
 		}
 	}
 	return out, ctx.Err()
+}
+
+// SubscribeHtlcEvents implements lnd.Streamer.
+func (f *Fake) SubscribeHtlcEvents(ctx context.Context, fn func(lnd.HtlcEvent) error) error {
+	if err := f.fail("SubscribeHtlcEvents"); err != nil {
+		return err
+	}
+	for _, ev := range f.HtlcEvents {
+		if err := fn(ev); err != nil {
+			return err
+		}
+	}
+	return f.end(ctx)
+}
+
+// SubscribeChannelEvents implements lnd.Streamer.
+func (f *Fake) SubscribeChannelEvents(ctx context.Context, fn func(lnd.ChannelEvent) error) error {
+	if err := f.fail("SubscribeChannelEvents"); err != nil {
+		return err
+	}
+	for _, ev := range f.ChannelEvents {
+		if err := fn(ev); err != nil {
+			return err
+		}
+	}
+	return f.end(ctx)
+}
+
+func (f *Fake) end(ctx context.Context) error {
+	if f.StreamEnd != nil {
+		return f.StreamEnd
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
