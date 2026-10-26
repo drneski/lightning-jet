@@ -268,8 +268,9 @@ fees automatically.
   bound on demand. On one production node, about a quarter of a month's failed
   volume into two parallel hub channels was the same amount retried through the
   other hub within minutes, and HTLCs of 1M sats or more made up another
-  quarter. Probes cannot be told apart at all, because no payment hash is
-  stored. `failed_htlc` has no index; the rebalancer scans a day of it every
+  quarter. Probes cannot be told apart at all: LND's HTLC stream carries no
+  payment hash, so neither 1.7 nor any read-only observer has one.
+  `failed_htlc` has no index; the rebalancer scans a day of it every
   2 min.
 
 ## 7. Worker (service/worker.js)
@@ -458,8 +459,11 @@ The detail behind each point is above. The design response is in the
 
 - **Keep the signals.** These are:
   - real routing volume per channel;
-  - failed HTLCs on our balance, stored with the payment hash so that retries
-    and probes can be told apart;
+  - failed HTLCs on our balance, recorded as they happen with both channels,
+    amounts and timelocks. LND's HTLC stream has no payment hash, and only its
+    HTLC interceptor does, which would put Jet on the routing path. So retries
+    and probes are told apart by inference from amounts, timelocks and timing,
+    labeled as inference;
   - the measured cost of every refill (`txn`, with channel ids), at msat
     precision in 2.0;
   - hop prices discovered while probing (`liquidity`).
