@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,7 +16,14 @@ import (
 	"time"
 )
 
+// isolate keeps the machine's own config and data out of a test.
+func isolate(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+}
+
 func TestRun(t *testing.T) {
+	isolate(t)
 	tests := []struct {
 		name       string
 		args       []string
@@ -28,8 +36,10 @@ func TestRun(t *testing.T) {
 		{name: "version flag", args: []string{"--version"}, wantCode: 0, wantStdout: "jet dev\n"},
 		{name: "help", args: []string{"help"}, wantCode: 0, wantStdout: "Usage:"},
 		{name: "unknown command", args: []string{"rebalance"}, wantCode: 2, wantStderr: `unknown command "rebalance"`},
-		{name: "run without credentials", args: []string{"run"}, wantCode: 2, wantStderr: "--tls-cert and --macaroon are required"},
-		{name: "run in live mode", args: []string{"run", "--tls-cert", "c", "--macaroon", "m", "--fees-mode", "live"}, wantCode: 2, wantStderr: "live mode needs an executor"},
+		{name: "run without credentials", args: []string{"run"}, wantCode: 2, wantStderr: "tls.cert and readonly.macaroon are required"},
+		{name: "run in live mode", args: []string{"run", "--tls-cert", "c", "--macaroon", "m", "--fees-mode", "live"}, wantCode: 2, wantStderr: "live needs an executor"},
+		{name: "run with a missing config", args: []string{"run", "--config", "/nonexistent/jet.conf"}, wantCode: 1, wantStderr: "no such file"},
+		{name: "health without a database", args: []string{"health", "--data-dir", t.TempDir()}, wantCode: 1, wantStderr: "no database"},
 		{name: "explain without a channel", args: []string{"explain"}, wantCode: 2, wantStderr: "expected one channel id"},
 		{name: "explain a bad channel id", args: []string{"explain", "abc"}, wantCode: 2, wantStderr: "invalid channel id"},
 		{name: "status without a database", args: []string{"status", "--data-dir", t.TempDir()}, wantCode: 1, wantStderr: "no database"},
@@ -71,7 +81,21 @@ func fakeLND(t *testing.T) (address, cert, macaroon string) {
 			http.Error(w, `{"message":"no macaroon"}`, http.StatusUnauthorized)
 			return
 		}
+		hold := func() { // a stream stays open until the client goes away
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}
 		switch {
+		case r.URL.Path == "/v2/router/htlcevents":
+			fmt.Fprintln(w, `{"result":{"event_type":"UNKNOWN","subscribed_event":{}}}`)
+			fmt.Fprintf(w, `{"result":{"incoming_channel_id":%q,"outgoing_channel_id":%q,"timestamp_ns":"%d","event_type":"FORWARD",`+
+				`"link_fail_event":{"info":{"outgoing_amt_msat":"300000000"},"wire_failure":"TEMPORARY_CHANNEL_FAILURE","failure_detail":"INSUFFICIENT_BALANCE"}}}`+"\n",
+				balanced, fullBusy, time.Now().UnixNano())
+			hold()
+		case r.URL.Path == "/v1/channels/subscribe":
+			hold()
+		case strings.HasPrefix(r.URL.Path, "/v1/graph/node/"):
+			fmt.Fprint(w, `{"channels":[]}`)
 		case r.URL.Path == "/v1/getinfo":
 			fmt.Fprintf(w, `{"identity_pubkey":%q,"block_height":900000,"synced_to_chain":true,"synced_to_graph":true}`, us)
 		case r.URL.Path == "/v1/channels":
@@ -114,6 +138,7 @@ func fakeLND(t *testing.T) (address, cert, macaroon string) {
 }
 
 func TestRunStatusExplainEndToEnd(t *testing.T) {
+	isolate(t)
 	address, cert, macaroon := fakeLND(t)
 	dataDir := filepath.Join(t.TempDir(), "data")
 	jet := func(args ...string) (int, string, string) {
@@ -169,5 +194,73 @@ func TestRunStatusExplainEndToEnd(t *testing.T) {
 
 	if code, _, stderr := jet("explain", "--data-dir", dataDir, "42"); code != 1 || !strings.Contains(stderr, "no decision recorded") {
 		t.Errorf("unknown channel: exit %d, %q", code, stderr)
+	}
+}
+
+func TestDaemonRecordsStreamsAndReportsHealth(t *testing.T) {
+	isolate(t)
+	address, cert, macaroon := fakeLND(t)
+	dataDir := filepath.Join(t.TempDir(), "data")
+	jet := func(args ...string) (int, string, string) {
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), args, &stdout, &stderr)
+		return code, stdout.String(), stderr.String()
+	}
+	if code, out, _ := jet("health", "--data-dir", dataDir); code != 1 || out != "" {
+		t.Errorf("health before any run: exit %d, %q", code, out)
+	}
+
+	// A config file supplies the LND settings; the data directory comes from a flag.
+	conf := filepath.Join(t.TempDir(), "jet.conf")
+	if err := os.WriteFile(conf, []byte(fmt.Sprintf("[lnd]\nrest_address = %s\ntls_cert = %s\nmacaroon = %s\n[jet]\ninterval = 1h\n", address, cert, macaroon)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int)
+	var stderr bytes.Buffer
+	go func() {
+		done <- run(ctx, []string{"run", "--config", conf, "--data-dir", dataDir}, io.Discard, &stderr)
+	}()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		code, out, _ := jet("health", "--data-dir", dataDir)
+		if code == 0 {
+			for _, want := range []string{"ok    cycle", "ok    htlc stream", "ok    channels stream"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("health is missing %q:\n%s", want, out)
+				}
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Jet never became healthy:\n%s\nlog:\n%s", out, stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The failure arrives on the stream after the first cycle; wait for it.
+	for {
+		_, out, _ := jet("status", "--data-dir", dataDir)
+		if strings.Contains(out, "1 forwards failed for lack of balance") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the streamed failure was never recorded:\n%s", out)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("run exited %d:\n%s", code, stderr.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not stop when canceled")
+	}
+
+	code, out, _ := jet("status", "--data-dir", dataDir)
+	if code != 0 || !strings.Contains(out, "Recording    htlc stream:") || !strings.Contains(out, "Recording    channels stream:") {
+		t.Errorf("status after the run: exit %d\n%s", code, out)
 	}
 }
