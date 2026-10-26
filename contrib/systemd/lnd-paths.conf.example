@@ -1,0 +1,16 @@
+# Drop-in for jet.service: the only LND files Jet may see. Install as
+# /etc/systemd/system/jet.service.d/lnd-paths.conf, with the paths of your
+# node, the same ones jet.conf names.
+#
+# On Umbrel, LND lives under /home, which jet.service replaces with an empty
+# tmpfs, so binding the two files back in is all it takes:
+[Service]
+BindReadOnlyPaths=/home/umbrel/umbrel/app-data/lightning/data/lnd/tls.cert
+BindReadOnlyPaths=/home/umbrel/umbrel/app-data/lightning/data/lnd/data/chain/bitcoin/mainnet/readonly.macaroon
+
+# If LND lives outside /home, say in /var/lib/lnd, hide its directory first,
+# then bind the two files back in:
+#
+# TemporaryFileSystem=/var/lib/lnd:ro
+# BindReadOnlyPaths=/var/lib/lnd/tls.cert
+# BindReadOnlyPaths=/var/lib/lnd/data/chain/bitcoin/mainnet/readonly.macaroon

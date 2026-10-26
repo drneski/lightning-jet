@@ -1,0 +1,61 @@
+# Lightning Jet 2.0, read-only and in shadow mode, under systemd.
+#
+# Jet runs as a fresh unprivileged user, sees a read-only file system apart
+# from its own state directory, and can reach only this machine. Home
+# directories are replaced by an empty tmpfs; the drop-in in jet.service.d/
+# binds LND's tls.cert and readonly.macaroon back in, read-only, and nothing
+# else of LND's. See README.md.
+
+[Unit]
+Description=Lightning Jet 2.0 (read-only, shadow mode)
+Documentation=https://github.com/drneski/lightning-jet/tree/v2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/opt/lightning-jet/jet run --config /etc/lightning-jet/jet.conf --data-dir /var/lib/lightning-jet
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=60s
+# Jet pings the watchdog every 10 minutes while healthy. If a cycle hangs, the
+# pings stop and systemd restarts it.
+WatchdogSec=20min
+
+# Identity and files.
+DynamicUser=yes
+StateDirectory=lightning-jet
+StateDirectoryMode=0700
+ConfigurationDirectory=lightning-jet
+UMask=0077
+ProtectSystem=strict
+ProtectHome=tmpfs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Network: LND on this machine only, and systemd's notify socket. The address
+# allowlist needs a kernel with cgroup BPF; without it, systemd warns and runs
+# without the allowlist (as on the Raspberry Pi kernel of Umbrel's Debian 10),
+# and the only guard is that Jet's code makes no outbound connections.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# Privileges.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
