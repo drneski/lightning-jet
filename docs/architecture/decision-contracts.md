@@ -109,8 +109,8 @@ The inputs one evaluation saw, frozen so the decision can be reconstructed.
 | `id`, `schema` | `jet.snapshot/1` |
 | `node_pubkey`, `block_height` | The node observed, and its chain tip |
 | `taken_at` | When the snapshot was assembled |
-| `sources` | Each input (channels, policies, forwards, and later failures, refills and gossip) with the time it was read from LND or the local store |
-| `channels` | Each channel's balances, both sides' policies, a summary of its forwards over the window, and its data quality: level and issues |
+| `sources` | Each input with the time it was read: from LND (channels, policies, forwards, the gossip graph) or from Jet's own record of LND's HTLC stream; later, refills |
+| `channels` | Each channel's balances, both sides' policies, a summary of its forwards over the window, the forwards that failed for lack of balance (counting attempts, not payments, with how much of the window was recorded), what competing channels into the peer advertise (a prior), and its data quality: level and issues |
 | `content_sha256` | SHA-256 of the snapshot's JSON encoding with this field empty, so a stored snapshot can be shown to be the one a decision used |
 
 Snapshots are stored locally under a retention policy. A record that outlives

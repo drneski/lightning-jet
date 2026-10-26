@@ -40,16 +40,42 @@ type Source struct {
 
 // ChannelObservation is what a snapshot saw of one channel.
 type ChannelObservation struct {
-	ChanID       ChanID      `json:"chan_id"`
-	Peer         string      `json:"peer"`
-	Active       bool        `json:"active"`
-	CapacityMsat MilliSat    `json:"capacity_msat"`
-	LocalMsat    MilliSat    `json:"local_msat"`
-	RemoteMsat   MilliSat    `json:"remote_msat"`
-	OurPolicy    *Policy     `json:"our_policy,omitempty"`
-	PeerPolicy   *Policy     `json:"peer_policy,omitempty"`
-	Forwards     Forwards    `json:"forwards"`
-	DataQuality  DataQuality `json:"data_quality"`
+	ChanID       ChanID       `json:"chan_id"`
+	Peer         string       `json:"peer"`
+	Active       bool         `json:"active"`
+	CapacityMsat MilliSat     `json:"capacity_msat"`
+	LocalMsat    MilliSat     `json:"local_msat"`
+	RemoteMsat   MilliSat     `json:"remote_msat"`
+	OurPolicy    *Policy      `json:"our_policy,omitempty"`
+	PeerPolicy   *Policy      `json:"peer_policy,omitempty"`
+	Forwards     Forwards     `json:"forwards"`
+	Failures     *Failures    `json:"failures,omitempty"`
+	Competition  *Competition `json:"competition,omitempty"`
+	DataQuality  DataQuality  `json:"data_quality"`
+}
+
+// Failures summarizes the forwards out of a channel that failed for lack of
+// balance, as Jet recorded them from LND's HTLC stream. It counts attempts,
+// not payments: retries and probes count again. CoverageHours is how much of
+// the window the stream was actually being recorded.
+type Failures struct {
+	WindowHours         int64    `json:"window_hours"`
+	CoverageHours       int64    `json:"coverage_hours"`
+	BalanceFailures     int      `json:"balance_failures"`
+	BalanceFailuresMsat MilliSat `json:"balance_failures_msat"`
+}
+
+// Competition is what other channels into the same peer advertise, from the
+// gossip graph: the price of the alternatives to this channel. It is a prior,
+// not a market price; gossip shows neither where liquidity sits nor which
+// paths senders choose.
+type Competition struct {
+	ReadAt         time.Time `json:"read_at"`
+	Channels       int       `json:"channels"`
+	FeePPMP25      int64     `json:"fee_ppm_p25"`
+	FeePPMMedian   int64     `json:"fee_ppm_median"`
+	FeePPMP75      int64     `json:"fee_ppm_p75"`
+	BaseMsatMedian MilliSat  `json:"base_msat_median"`
 }
 
 // Policy is one side's routing policy for a channel.
