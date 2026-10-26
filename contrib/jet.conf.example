@@ -1,0 +1,45 @@
+# Lightning Jet 2.0 configuration. The format is lnd.conf's: [sections],
+# key = value, comment lines starting with # or ;, and a key repeated to make a
+# list. Unknown keys, repeated settings and comments after a value are errors.
+# Flags given to jet override this file.
+#
+# Jet looks for this file at $XDG_CONFIG_HOME/lightning-jet/jet.conf
+# (~/.config/lightning-jet/jet.conf on Linux, ~/Library/Application
+# Support/lightning-jet/jet.conf on macOS), or wherever --config says.
+
+[lnd]
+# LND's REST listener.
+rest_address = localhost:8080
+# LND's TLS certificate, which Jet pins.
+tls_cert = /path/to/lnd/tls.cert
+# The read-only macaroon. Jet only reads; never give it admin.macaroon.
+macaroon = /path/to/lnd/data/chain/bitcoin/mainnet/readonly.macaroon
+
+[jet]
+# Where the database lives. Defaults to $XDG_DATA_HOME/lightning-jet.
+# data_dir = /var/lib/lightning-jet
+# Time between decision cycles; at least 1m.
+interval = 1h
+
+[fees]
+# shadow: decide and record, never change anything. off: don't evaluate.
+mode = shadow
+
+[limits]
+# Bounds every proposed fee must stay inside.
+fee_ppm_min = 1
+fee_ppm_max = 3000
+# Largest single change, as a percentage of the current fee (at least 1 ppm).
+max_step_pct = 15
+# Hours after an approved change before the same channel may change again.
+cooldown_hours = 12
+max_fee_changes_per_day = 2
+# Channels Jet must never change, one per line.
+# freeze = 111111111111111111
+
+[observe]
+# How far back forwards and failed HTLCs are summarized.
+window_days = 30
+# How often competitors' advertised fees are read from the graph; 0 turns
+# it off.
+gossip_refresh_hours = 24
