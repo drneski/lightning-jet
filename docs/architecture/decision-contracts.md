@@ -53,7 +53,8 @@ execution.
 - **Channels** are identified by their short channel id, a 64-bit integer written
   as a decimal string in JSON (`"chan_id": "…"`), because it exceeds the range
   some JSON readers handle exactly. Peers are 33-byte public keys in hex.
-- **Time** is UTC. JSON uses RFC 3339 with milliseconds. Durations are whole
+- **Time** is UTC. JSON uses RFC 3339 at millisecond precision, with a zero
+  fraction left out (`2026-10-26T00:00:00Z`). Durations are whole
   hours (`_hours`).
 - **Identifiers** are UUIDv7, which are unique and time-ordered. They are
   internal: anything Jet ever publishes gets fresh random ids, as in Foundry's
@@ -106,11 +107,11 @@ The inputs one evaluation saw, frozen so the decision can be reconstructed.
 | Field | Meaning |
 |---|---|
 | `id`, `schema` | `jet.snapshot/1` |
-| `node_pubkey` | The node observed |
+| `node_pubkey`, `block_height` | The node observed, and its chain tip |
 | `taken_at` | When the snapshot was assembled |
-| `sources` | Each input (channels, policies, forwards, failures, refills, gossip) with the time it was read from LND or the local store |
-| `data_quality` | Per channel and per input: level and issues |
-| `content_sha256` | Hash of the snapshot's canonical serialization, so a stored snapshot can be shown to be the one a decision used |
+| `sources` | Each input (channels, policies, forwards, and later failures, refills and gossip) with the time it was read from LND or the local store |
+| `channels` | Each channel's balances, both sides' policies, a summary of its forwards over the window, and its data quality: level and issues |
+| `content_sha256` | SHA-256 of the snapshot's JSON encoding with this field empty, so a stored snapshot can be shown to be the one a decision used |
 
 Snapshots are stored locally under a retention policy. A record that outlives
 its snapshot keeps the hash and every value `jet explain` shows, so the
@@ -129,7 +130,7 @@ believed.
 | `snapshot_id` | The inputs used |
 | `estimator` | Name and version |
 | `horizon_hours` | The period the estimate covers |
-| `expected_msat` | The expected **incremental** value over the horizon, compared with doing nothing. For a cost estimate, the expected cost. |
+| `expected_msat` | What the kind defines. A value estimate gives the expected **incremental** value over the horizon, compared with doing nothing. A baseline, such as `outbound_revenue` (what the channel earns if nothing changes), gives the expected amount. A cost estimate gives the expected cost. |
 | `low_msat`, `high_msat`, `interval` | The range, and what it is (for example `p10-p90`). At economic confidence `none`, all three value fields are omitted: there is no forecast to state. |
 | `economic_confidence` | Level and basis (sample sizes, windows) |
 | `data_quality` | Level and issues, carried from the snapshot for the inputs used |
@@ -139,7 +140,8 @@ believed.
 
 "Incremental" is the point. An estimate that can't say what would happen without
 the action has to say so through its confidence, not by quietly crediting the
-action with revenue the channel would have earned anyway.
+action with revenue the channel would have earned anyway. Baselines are what
+incremental value is measured against.
 
 ## Intent
 
@@ -150,7 +152,7 @@ A proposed action, specific enough to authorize, execute and audit.
 | `id`, `schema` | `jet.intent/1` |
 | `action` | `fee_update` or `rebalance` (more later) |
 | `target` | The channel acted on; for `rebalance`, also the source channel |
-| `parameters` | Per action. `fee_update`: new base and ppm, with the observed values they replace. `rebalance`: amount to move. |
+| `parameters` | Per action. `fee_update` has `fee`: `base_msat` and `fee_ppm`, with the `observed_base_msat` and `observed_fee_ppm` they replace. `rebalance` will have the amount to move. |
 | `limits` | The bounds execution must stay inside. `rebalance`: maximum fee (`max_fee_msat`) and time limit. `fee_update`: none beyond the parameters. |
 | `rationale` | The estimate ids it rests on, and a one-line summary generated from them |
 | `strategy` | Name and version |
@@ -188,17 +190,18 @@ Authorization's verdict on one intent.
 | `snapshot_id` | The inputs authorization used: the intent's, unless authorization ran later and re-read state |
 | `verdict` | `approved` or `rejected` |
 | `reason` | For a rejection, the rule or rules that failed, with their numbers |
-| `rules` | Every rule evaluated, with its result and detail, not just the failing ones |
+| `rules` | Every rule evaluated, as `rule`, `passed` and `detail`, not just the failing ones |
 | `policy_version` | Hash of the effective limits configuration |
 | `authorizer` | `standalone` now; `foundry` once managed mode exists |
 | `mode` | `shadow` or `live` |
-| `reservation` | The budget reserved for an approved intent. In live mode it is held until the intent's final state. In shadow mode the full reservation is booked as hypothetical spend in a separate shadow ledger, so later shadow decisions meet the limits a live run would have met, without touching live budgets. |
+| `reservation_msat` | The budget reserved for an approved intent. In live mode it is held until the intent's final state. In shadow mode the full reservation is booked as hypothetical spend in a separate shadow ledger, so later shadow decisions meet the limits a live run would have met, without touching live budgets. |
 | `decided_at` | When |
 
 ### Outcomes
 
-An outcome is appended to the intent each time its state changes, so the
-decision record itself stays immutable:
+An outcome (`jet.outcome/1`: `id`, `intent_id`, `state`, `detail`, `at`) is
+appended to the intent each time its state changes, so the decision record
+itself stays immutable:
 
 | State | Meaning |
 |---|---|
