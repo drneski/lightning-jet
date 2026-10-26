@@ -1,7 +1,8 @@
 # Lightning Jet 2.0
 
-> **This is the `v2` branch: a ground-up rebuild, in development.** Nothing here
-> reads from or acts on a node yet. Lightning Jet 1.7 is on
+> **This is the `v2` branch: a ground-up rebuild, in development.** It reads a
+> node and records what it would do, in shadow mode; it changes nothing on the
+> node. Lightning Jet 1.7 is on
 > [`main`](https://github.com/drneski/lightning-jet/tree/main), and it is the
 > version to run today.
 
@@ -25,6 +26,28 @@ milestone is a read-only vertical slice:
 
 The records and rules it follows are in
 [`docs/architecture/decision-contracts.md`](docs/architecture/decision-contracts.md).
+
+## Trying the slice
+
+It is read-only and shadow-only: it reads LND with the read-only macaroon,
+records what it would do, and changes nothing. Its database lives in
+`$XDG_DATA_HOME/lightning-jet` (by default `~/.local/share/lightning-jet` on
+Linux and `~/Library/Application Support/lightning-jet` on macOS), or wherever
+`--data-dir` says.
+
+```bash
+jet run --once --lnd localhost:8080 --tls-cert /path/to/tls.cert --macaroon /path/to/readonly.macaroon
+```
+
+```bash
+jet status
+```
+
+```bash
+jet explain <channel id>
+```
+
+Without `--once`, `jet run` repeats every hour (`--interval`) until stopped.
 
 ## Building
 
