@@ -276,19 +276,25 @@ are gone.
 | Foundry managed mode | Foundry's supervisor | Jet only has to be a well-behaved foreground process |
 | macOS, for development | launchd, or run directly | |
 
-**The systemd unit.** A separate OS user is not enough on its own. On Umbrel,
-for example, `admin.macaroon` is owner-only but the other macaroons are
-world-readable, `router.macaroon` included, and that one can send payments. So
-the unit:
-- runs Jet as a fresh dynamic user with no capabilities and no new privileges;
-- leaves the file system read-only apart from its state directory;
-- replaces home directories with an empty tmpfs, then binds back in, read-only,
-  only LND's `tls.cert` and `readonly.macaroon` (a drop-in names them per node);
-- allows only localhost on the network.
+**The systemd unit.** A separate OS user is the first guard. LND keeps its
+macaroons in owner-only directories, though on Umbrel the files inside are
+world-readable, `router.macaroon` included, and that one can send payments.
+The unit doesn't rely on those directories alone:
+- it runs Jet as a fresh dynamic user with no capabilities and no new
+  privileges;
+- it leaves the file system read-only apart from Jet's state directory;
+- it makes home directories inaccessible, and a drop-in that names the node's
+  paths binds only LND's `tls.cert` and `readonly.macaroon`, read-only, into
+  `/run/lightning-jet`;
+- it allows only localhost on the network.
 
-The address allowlist needs a kernel with cgroup BPF. Where that is missing,
-as on the Raspberry Pi kernel of Umbrel's Debian 10, systemd runs without it,
-and the only guard against outbound connections is Jet's code making none.
+Two limits on Umbrel's Debian 10 shaped this:
+- Its systemd, 241, drops `ProtectHome=tmpfs` when `ProtectSystem=strict` is
+  set, and leaves the real `/home` visible. So the unit uses `ProtectHome=yes`
+  and binds LND's files outside `/home`.
+- The address allowlist needs a kernel with cgroup BPF, which the Raspberry Pi
+  kernel lacks. There systemd runs without the allowlist, and the only guard
+  against outbound connections is Jet's code making none.
 
 **Configuration.** `jet.conf` uses the format node operators know from
 `lnd.conf`: `[sections]`, `key = value`, comment lines starting with `#` or

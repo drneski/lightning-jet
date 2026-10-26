@@ -61,12 +61,12 @@ Then:
 
 [`contrib/systemd/jet.service`](contrib/systemd/jet.service) runs Jet as an
 unprivileged dynamic user, with a read-only file system apart from
-`/var/lib/lightning-jet`. Home directories are hidden, and the drop-in binds
-back in only LND's `tls.cert` and `readonly.macaroon`. Fill in the drop-in
-from
+`/var/lib/lightning-jet`. Home directories are inaccessible to it. A drop-in
+binds only LND's `tls.cert` and `readonly.macaroon` into `/run/lightning-jet`,
+read-only. Fill it in from
 [`contrib/systemd/lnd-paths.conf.example`](contrib/systemd/lnd-paths.conf.example)
-with your node's paths, and put the same paths in `/etc/lightning-jet/jet.conf`.
-Then:
+with your node's paths. The unit passes the bound paths to `jet run`, so
+`/etc/lightning-jet/jet.conf` needs no `tls_cert` or `macaroon`. Then:
 
 ```bash
 sudo install -D -m 0755 jet /opt/lightning-jet/jet
