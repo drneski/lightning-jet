@@ -54,6 +54,23 @@ sets the value it waits on).
 
 ## 3. The automated rebalancer
 
+`service/rebalancer.js` plans and dispatches; `api/rebalance.js` (§4) performs
+one run.
+
+### 3.0 Startup
+
+- **One instance only,** enforced by matching its own file name among the
+  host's processes.
+- **The exclude list is read once.** `rebalancer.exclude` entries are pubkeys,
+  optionally with a type: `<pubkey>` or `<pubkey>:<type>`. The type is `all`,
+  `inbound` (alias `from`), or `outbound` (alias `to`, and the default). So a
+  bare pubkey only stops refills *into* that peer. Each pubkey is checked
+  against the current peers, and unknown ones are skipped with a Telegram
+  alert. Changing the list needs a restart.
+- **The cycles.** The planning cycle runs at once and then every 120 s, recording
+  a heartbeat each time, even when LND is down. Dispatch starts after 10 s and
+  runs every 10 s. A loop error is sent to Telegram once, not on every repeat.
+
 ### 3.1 Classification (api/utils.js `classifyPeersSync`, 1 day)
 
 Built from `forwardingHistory` for the last day, capped at 10,000 events with no
@@ -77,6 +94,15 @@ only real routing counts.
 
 Constants: `minToRebalance` 50,000; `minLocal` 1,000,000; `split` defaults to 1.
 
+`in_flight` for a peer is the sum of two things:
+- its pending HTLCs on forwards;
+- the full requested amount of every running rebalance from or to it (not
+  what's left to move). HTLCs belonging to Jet's own rebalances are excluded,
+  so nothing is counted twice.
+
+It never includes refills that are queued but not started. The queue has a
+per-peer total (`queue.sats`), but nothing calls it.
+
 | Role | Formula |
 |---|---|
 | source (inbound) | `has = local − (capacity − min(split·capacity, inflow_1d))` |
@@ -98,6 +124,13 @@ Constants: `minToRebalance` 50,000; `minLocal` 1,000,000; `split` defaults to 1.
 4. **low volume**: balanced peers that have sats feed those that need them;
    here the source's remainder *is* tracked.
 
+The queue persists between cycles and is ordered by start time. An item's
+amount and max ppm are fixed when it is planned, and it may start up to 9 min
+later (`60·i` s). A pair already queued or running is not planned again. But
+because sizing ignores the queue, one target can take refills from several
+sources in the same cycle, or in later cycles while earlier items still wait,
+each sized against the same balance.
+
 ### 3.4 Gate per pair (`checkPeers`, rebalancer.js:496)
 
 - one rebalance in flight per (from, to) pair;
@@ -115,7 +148,11 @@ rebalance-proc. The ceiling: `rebalanceFeesCommittedSync` (fees paid by
 successes in the last 24 h, plus `amount·ppm` for every active rebalance still
 within twice its time limit) plus reservations for processes spawned in the
 last 3 min, plus the new item's `amount·ppm`, must stay within `maxDailyFee`
-(100,000; 0 disables). The queue lives in memory; a restart drops it.
+(100,000; 0 disables). An item over the ceiling is dropped, not held, and the
+next cycle plans it again if it's still needed. The ceiling alert goes to
+Telegram at most once a day. Every due item spawns in the same pass, so up to
+`maxInstances` Node processes can start together. The queue lives in memory; a
+restart drops it.
 
 ## 4. One rebalance (api/rebalance.js + bos/rebalance.js)
 
@@ -291,6 +328,12 @@ Everything else (`status`, `peers`, `fees`, `analyze-fees`, `stats`,
   whenever bos logs at debug level.
 - **Per-hop fee skips never reach bos** (api/rebalance.js:254): a run can
   retry the same expensive route.
+- **Sizing ignores the queue** (service/rebalancer.js:650, and
+  service/queue.js:34, which nothing calls). One target can be promised refills
+  from several sources at once, each sized against the same balance (§3.3).
+- **The "no peers" guard on the exclude list can't fire**
+  (service/rebalancer.js:80). It tests `peerMap.length` on an object. With no
+  peers, every exclude entry is reported unknown instead.
 - **`jet update-channel` ignores `failed_updates`** in LND's reply and prints
   "done" for a policy change that failed (lnd-api/update-channel.js:52).
 - **`tools/prune-payments`** proceeds on any answer except `n`, including a
