@@ -10,6 +10,8 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
 	"github.com/drneski/lightning-jet/v2/internal/lnd"
 	"github.com/drneski/lightning-jet/v2/internal/lnd/lndtest"
+	"github.com/drneski/lightning-jet/v2/internal/record"
+	"github.com/drneski/lightning-jet/v2/internal/store"
 )
 
 const (
@@ -139,6 +141,122 @@ func TestNoNodeInfoFailsTheSnapshot(t *testing.T) {
 func hasIssue(q contracts.DataQuality, sub string) bool {
 	for _, i := range q.Issues {
 		if strings.Contains(i, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+type failureSource struct {
+	failures map[contracts.ChanID]store.BalanceFailures
+	coverage time.Duration
+	err      error
+}
+
+func (f failureSource) BalanceFailuresSince(context.Context, time.Time) (map[contracts.ChanID]store.BalanceFailures, error) {
+	return f.failures, f.err
+}
+
+func (f failureSource) Coverage(_ context.Context, stream string, _, _ time.Time) (time.Duration, error) {
+	if stream != record.StreamHTLC {
+		return 0, errors.New("unexpected stream " + stream)
+	}
+	return f.coverage, f.err
+}
+
+func TestFailuresAreSummarizedWithCoverage(t *testing.T) {
+	o := observer(fakeNode())
+	o.Failures = failureSource{failures: map[contracts.ChanID]store.BalanceFailures{1: {Count: 4, AmountMsat: 900_000_000}}, coverage: 50 * time.Hour}
+	snap, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := snap.Channel(1)
+	if f := c1.Failures; f == nil || f.BalanceFailures != 4 || f.BalanceFailuresMsat != 900_000_000 || f.CoverageHours != 50 || f.WindowHours != 720 {
+		t.Errorf("channel 1 failures = %+v", c1.Failures)
+	}
+	c2, _ := snap.Channel(2)
+	if f := c2.Failures; f == nil || f.BalanceFailures != 0 || f.CoverageHours != 50 {
+		t.Errorf("channel 2, with none recorded, failures = %+v", c2.Failures)
+	}
+	if !hasSource(snap, "jet.htlc_stream") {
+		t.Errorf("sources = %+v", snap.Sources)
+	}
+}
+
+func TestUnreadableFailureRecordDegrades(t *testing.T) {
+	o := observer(fakeNode())
+	o.Failures = failureSource{err: errors.New("database is locked")}
+	snap, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := snap.Channel(1)
+	if c1.Failures != nil || c1.DataQuality.Level != contracts.DataDegraded || !hasIssue(c1.DataQuality, "failed-HTLC record unavailable") {
+		t.Errorf("failures %+v, data quality %+v", c1.Failures, c1.DataQuality)
+	}
+}
+
+func TestCompetitionFromTheGraph(t *testing.T) {
+	f := fakeNode()
+	far := func(ppm int64, disabled bool) *lnd.RoutingPolicy {
+		return &lnd.RoutingPolicy{FeeRateMilliMsat: ppm, FeeBaseMsat: 1000, Disabled: disabled}
+	}
+	other := func(i int) string { return "02" + strings.Repeat(string(rune('c'+i)), 64) }
+	f.NodeEdges = map[string][]lnd.Edge{peer: {
+		{ChanID: 1, Node1Pub: us, Node2Pub: peer},                                      // ours: left out
+		{ChanID: 10, Node1Pub: other(0), Node2Pub: peer, Node1Policy: far(100, false)}, // far side is node1
+		{ChanID: 11, Node1Pub: peer, Node2Pub: other(1), Node2Policy: far(300, false)}, // far side is node2
+		{ChanID: 12, Node1Pub: other(2), Node2Pub: peer, Node1Policy: far(200, false)},
+		{ChanID: 13, Node1Pub: other(3), Node2Pub: peer, Node1Policy: far(9000, true)}, // disabled
+		{ChanID: 14, Node1Pub: other(4), Node2Pub: peer, Node1Policy: nil},             // not gossiped
+		{ChanID: 15, Node1Pub: peer, Node2Pub: other(5), Node1Policy: far(5, false)},   // the peer's own side: not a competitor's price
+	}}
+	o := observer(f)
+	o.GossipEvery = 24 * time.Hour
+	snap, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := snap.Channel(1)
+	comp := c1.Competition
+	if comp == nil || comp.Channels != 3 || comp.FeePPMP25 != 100 || comp.FeePPMMedian != 200 || comp.FeePPMP75 != 200 || comp.BaseMsatMedian != 1000 {
+		t.Fatalf("competition = %+v", comp)
+	}
+	if !hasSource(snap, "lnd.graph.node") {
+		t.Errorf("sources = %+v", snap.Sources)
+	}
+
+	// Within GossipEvery the reading is reused, so a graph error doesn't matter.
+	f.Errors = map[string]error{"NodeChannels": errors.New("graph unavailable")}
+	again, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, _ = again.Channel(1)
+	if c1.Competition == nil || c1.Competition.Channels != 3 || hasSource(again, "lnd.graph.node") {
+		t.Errorf("cached competition = %+v, sources %+v", c1.Competition, again.Sources)
+	}
+}
+
+func TestCompetitionErrorIsANoteNotADowngrade(t *testing.T) {
+	f := fakeNode()
+	f.Errors = map[string]error{"NodeChannels": errors.New("graph unavailable")}
+	o := observer(f)
+	o.GossipEvery = time.Hour
+	snap, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := snap.Channel(1)
+	if c1.Competition != nil || c1.DataQuality.Level != contracts.DataGood || !hasIssue(c1.DataQuality, "competing channels unavailable") {
+		t.Errorf("competition %+v, data quality %+v", c1.Competition, c1.DataQuality)
+	}
+}
+
+func hasSource(s *contracts.Snapshot, name string) bool {
+	for _, src := range s.Sources {
+		if src.Name == name {
 			return true
 		}
 	}
