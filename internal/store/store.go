@@ -478,6 +478,33 @@ func (c ChannelStatus) Result() string {
 	return "no decision recorded"
 }
 
+// Snapshot returns the snapshot with this id.
+func (s *Store) Snapshot(ctx context.Context, id string) (*contracts.Snapshot, error) {
+	return getRecord[contracts.Snapshot](ctx, s.db, `SELECT record FROM snapshots WHERE id = ?`, id)
+}
+
+// Estimates returns the estimates made from a snapshot, in channel order.
+func (s *Store) Estimates(ctx context.Context, snapshotID string) ([]*contracts.Estimate, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT record FROM estimates WHERE snapshot_id = ? ORDER BY chan_id, kind, id`, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*contracts.Estimate
+	for rows.Next() {
+		var rec string
+		if err := rows.Scan(&rec); err != nil {
+			return nil, err
+		}
+		e := &contracts.Estimate{}
+		if err := json.Unmarshal([]byte(rec), e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // LatestStatus returns a summary of the most recent recorded cycle.
 func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 	snap, err := getRecord[contracts.Snapshot](ctx, s.db, `SELECT record FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT ?`, 1)
