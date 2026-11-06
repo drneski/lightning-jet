@@ -464,6 +464,14 @@ type ChannelStatus struct {
 	Abstained    contracts.AbstentionReason
 	Proposal     *contracts.FeeParameters
 	Verdict      contracts.Verdict
+	// Blocked names the rules a rejected proposal failed.
+	Blocked []string
+	// Mode is the mode a proposal was decided in.
+	Mode contracts.Mode
+	// PriorApprovals counts the fee changes to the channel approved in that
+	// mode in the 24 hours before the decision. The limits count shadow
+	// approvals as they would live ones, though nothing was applied.
+	PriorApprovals int
 }
 
 // Result says what the cycle did with the channel, in the words jet status and
@@ -559,14 +567,20 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 		return nil, err
 	}
 	props, err := s.db.QueryContext(ctx, `
-		SELECT i.chan_id, i.record, d.verdict FROM intents i JOIN decisions d ON d.intent_id = i.id WHERE i.snapshot_id = ?`, snap.ID)
+		SELECT i.chan_id, i.record, d.record FROM intents i JOIN decisions d ON d.intent_id = i.id WHERE i.snapshot_id = ?`, snap.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer props.Close()
+	type decided struct {
+		chanID contracts.ChanID
+		mode   contracts.Mode
+		at     time.Time
+	}
+	var proposals []decided
 	for props.Next() {
-		var ch, rec, verdict string
-		if err := props.Scan(&ch, &rec, &verdict); err != nil {
+		var ch, rec, drec string
+		if err := props.Scan(&ch, &rec, &drec); err != nil {
 			return nil, err
 		}
 		id, err := contracts.ParseChanID(ch)
@@ -577,10 +591,31 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 		if err := json.Unmarshal([]byte(rec), &in); err != nil {
 			return nil, err
 		}
-		results[id].Proposal, results[id].Verdict = in.Parameters.Fee, contracts.Verdict(verdict)
+		var d contracts.Decision
+		if err := json.Unmarshal([]byte(drec), &d); err != nil {
+			return nil, err
+		}
+		results[id].Proposal, results[id].Verdict, results[id].Mode = in.Parameters.Fee, d.Verdict, d.Mode
+		for _, r := range d.Rules {
+			if !r.Passed {
+				results[id].Blocked = append(results[id].Blocked, r.Rule)
+			}
+		}
+		proposals = append(proposals, decided{id, d.Mode, d.DecidedAt})
 	}
 	if err := props.Err(); err != nil {
 		return nil, err
+	}
+	for _, p := range proposals {
+		approved, err := s.ApprovedFeeChanges(ctx, p.chanID, p.mode, p.at.Add(-24*time.Hour))
+		if err != nil {
+			return nil, err
+		}
+		for _, at := range approved {
+			if at.Before(p.at) {
+				results[p.chanID].PriorApprovals++
+			}
+		}
 	}
 	for i := range st.PerChannel {
 		st.PerChannel[i] = *results[st.PerChannel[i].ChanID]

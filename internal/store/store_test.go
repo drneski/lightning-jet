@@ -130,6 +130,28 @@ func TestLatestEvaluationIsTheNewest(t *testing.T) {
 	}
 }
 
+// A proposal's prior approvals are those in its mode in the 24 hours before
+// it, not counting itself.
+func TestLatestStatusCountsPriorApprovals(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	for i, at := range []time.Time{t0.Add(-25 * time.Hour), t0.Add(-time.Hour), t0} {
+		if err := s.SaveCycle(ctx, sampleCycle(t, string(rune('a'+i)), at, contracts.ModeShadow)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SaveCycle(ctx, sampleCycle(t, "l", t0.Add(-2*time.Hour), contracts.ModeLive)); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.LatestStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := st.PerChannel[0]; c.Mode != contracts.ModeShadow || c.PriorApprovals != 1 {
+		t.Errorf("channel 1: mode %s, prior approvals %d; want shadow, 1", c.Mode, c.PriorApprovals)
+	}
+}
+
 func TestApprovedFeeChangesKeepsLedgersApart(t *testing.T) {
 	s, _ := openTemp(t)
 	ctx := context.Background()
