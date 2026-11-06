@@ -33,6 +33,7 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/lnd"
 	"github.com/drneski/lightning-jet/v2/internal/observe"
 	"github.com/drneski/lightning-jet/v2/internal/record"
+	"github.com/drneski/lightning-jet/v2/internal/report"
 	"github.com/drneski/lightning-jet/v2/internal/store"
 	"github.com/drneski/lightning-jet/v2/internal/strategy/fee"
 )
@@ -69,6 +70,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		err = cmdExplain(ctx, args[1:], stdout, stderr)
 	case "health":
 		err = cmdHealth(ctx, args[1:], stdout, stderr)
+	case "report":
+		err = cmdReport(ctx, args[1:], stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "jet", version)
 		return 0
@@ -112,6 +115,7 @@ Commands:
   run       Observe the node and record decisions, once or on an interval
   status    Summarize the most recent cycle and what is being recorded
   explain   Explain the latest decision about a channel
+  report    Each channel's economics: earnings, yield, failures, forecast
   health    Check that Jet is running and recording; exit 1 if not
   version   Print the version
   help      Show this help
@@ -367,6 +371,47 @@ func cmdExplain(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return enc.Encode(x)
 	}
 	fmt.Fprint(stdout, x.Text())
+	return nil
+}
+
+func cmdReport(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := newFlags("report", stderr)
+	c := addCommon(fs)
+	asJSON := fs.Bool("json", false, "print the report as JSON")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	cfg, err := c.load()
+	if err != nil {
+		return err
+	}
+	st, err := openExisting(ctx, c.dbPath(cfg))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	s, err := st.LatestStatus(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return errors.New("no cycle recorded yet; run jet run first")
+	}
+	if err != nil {
+		return err
+	}
+	snap, err := st.Snapshot(ctx, s.SnapshotID)
+	if err != nil {
+		return err
+	}
+	estimates, err := st.Estimates(ctx, s.SnapshotID)
+	if err != nil {
+		return err
+	}
+	r := report.Build(snap, estimates, s)
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(r)
+	}
+	fmt.Fprint(stdout, r.Text())
 	return nil
 }
 
