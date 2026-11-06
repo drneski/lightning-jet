@@ -35,11 +35,17 @@ type Observer struct {
 	// Failures is the recorded HTLC stream. Without it, snapshots have no
 	// failure summary.
 	Failures FailureSource
-	// GossipEvery is how often each peer's competing channels are read again.
-	// Zero leaves competition out.
+	// GossipEvery is how often each peer's alias and competing channels are
+	// read again. Zero leaves both out.
 	GossipEvery time.Duration
 
-	gossip map[string]*contracts.Competition
+	gossip map[string]peerGossip
+}
+
+// peerGossip is what the graph said about a peer when it was last read.
+type peerGossip struct {
+	alias       string
+	competition *contracts.Competition
 }
 
 // Snapshot reads the node and returns a sealed snapshot. It fails only if LND
@@ -141,13 +147,13 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 		}
 
 		if o.GossipEvery > 0 {
-			comp, fresh, err := o.competition(ctx, ch.RemotePubkey, info.IdentityPubkey, now)
+			g, fresh, err := o.peerGossip(ctx, ch.RemotePubkey, info.IdentityPubkey, now)
 			switch {
 			case err != nil:
 				// A missing prior doesn't lower the quality of what was observed.
 				dq.Add(contracts.DataGood, "competing channels unavailable: "+err.Error())
 			default:
-				obs.Competition = comp
+				obs.PeerAlias, obs.Competition = g.alias, g.competition
 				gossipRead = gossipRead || fresh
 			}
 		}
@@ -173,20 +179,21 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 	return snap, nil
 }
 
-// competition summarizes what the other channels into a peer advertise: for
-// each, the policy of the node on its far side, which is what that node charges
-// to forward into the peer. Our own channels are left out. Readings are cached
-// for GossipEvery; fresh reports whether this call read the graph.
-func (o *Observer) competition(ctx context.Context, peer, us string, now time.Time) (*contracts.Competition, bool, error) {
-	if c, ok := o.gossip[peer]; ok && now.Sub(c.ReadAt) < o.GossipEvery {
-		return c, false, nil
+// peerGossip reads a peer's alias from the graph, and summarizes what the
+// other channels into the peer advertise: for each, the policy of the node on
+// its far side, which is what that node charges to forward into the peer. Our
+// own channels are left out. Readings are cached for GossipEvery; fresh
+// reports whether this call read the graph.
+func (o *Observer) peerGossip(ctx context.Context, peer, us string, now time.Time) (peerGossip, bool, error) {
+	if g, ok := o.gossip[peer]; ok && now.Sub(g.competition.ReadAt) < o.GossipEvery {
+		return g, false, nil
 	}
-	edges, err := callLND(ctx, o.CallTimeout, func(c context.Context) ([]lnd.Edge, error) { return o.LND.NodeChannels(c, peer) })
+	node, err := callLND(ctx, o.CallTimeout, func(c context.Context) (lnd.GraphNode, error) { return o.LND.GraphNode(c, peer) })
 	if err != nil {
-		return nil, false, err
+		return peerGossip{}, false, err
 	}
 	var ppms, bases []int64
-	for _, e := range edges {
+	for _, e := range node.Channels {
 		var p *lnd.RoutingPolicy
 		switch {
 		case e.Node1Pub == us || e.Node2Pub == us:
@@ -208,10 +215,11 @@ func (o *Observer) competition(ctx context.Context, peer, us string, now time.Ti
 		c.BaseMsatMedian = contracts.MilliSat(percentile(bases, 50))
 	}
 	if o.gossip == nil {
-		o.gossip = map[string]*contracts.Competition{}
+		o.gossip = map[string]peerGossip{}
 	}
-	o.gossip[peer] = c
-	return c, true, nil
+	g := peerGossip{alias: node.Alias, competition: c}
+	o.gossip[peer] = g
+	return g, true, nil
 }
 
 // percentile returns the value at rank (n-1)*p/100, rounded down, of vs, which

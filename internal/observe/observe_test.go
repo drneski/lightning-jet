@@ -203,7 +203,7 @@ func TestCompetitionFromTheGraph(t *testing.T) {
 		return &lnd.RoutingPolicy{FeeRateMilliMsat: ppm, FeeBaseMsat: 1000, Disabled: disabled}
 	}
 	other := func(i int) string { return "02" + strings.Repeat(string(rune('c'+i)), 64) }
-	f.NodeEdges = map[string][]lnd.Edge{peer: {
+	f.Nodes = map[string]lnd.GraphNode{peer: {Alias: "synthetic peer", Channels: []lnd.Edge{
 		{ChanID: 1, Node1Pub: us, Node2Pub: peer},                                      // ours: left out
 		{ChanID: 10, Node1Pub: other(0), Node2Pub: peer, Node1Policy: far(100, false)}, // far side is node1
 		{ChanID: 11, Node1Pub: peer, Node2Pub: other(1), Node2Policy: far(300, false)}, // far side is node2
@@ -211,7 +211,7 @@ func TestCompetitionFromTheGraph(t *testing.T) {
 		{ChanID: 13, Node1Pub: other(3), Node2Pub: peer, Node1Policy: far(9000, true)}, // disabled
 		{ChanID: 14, Node1Pub: other(4), Node2Pub: peer, Node1Policy: nil},             // not gossiped
 		{ChanID: 15, Node1Pub: peer, Node2Pub: other(5), Node1Policy: far(5, false)},   // the peer's own side: not a competitor's price
-	}}
+	}}}
 	o := observer(f)
 	o.GossipEvery = 24 * time.Hour
 	snap, err := o.Snapshot(context.Background())
@@ -223,25 +223,25 @@ func TestCompetitionFromTheGraph(t *testing.T) {
 	if comp == nil || comp.Channels != 3 || comp.FeePPMP25 != 100 || comp.FeePPMMedian != 200 || comp.FeePPMP75 != 200 || comp.BaseMsatMedian != 1000 {
 		t.Fatalf("competition = %+v", comp)
 	}
-	if !hasSource(snap, "lnd.graph.node") {
-		t.Errorf("sources = %+v", snap.Sources)
+	if c1.PeerAlias != "synthetic peer" || !hasSource(snap, "lnd.graph.node") {
+		t.Errorf("alias %q, sources %+v", c1.PeerAlias, snap.Sources)
 	}
 
 	// Within GossipEvery the reading is reused, so a graph error doesn't matter.
-	f.Errors = map[string]error{"NodeChannels": errors.New("graph unavailable")}
+	f.Errors = map[string]error{"GraphNode": errors.New("graph unavailable")}
 	again, err := o.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	c1, _ = again.Channel(1)
-	if c1.Competition == nil || c1.Competition.Channels != 3 || hasSource(again, "lnd.graph.node") {
+	if c1.Competition == nil || c1.Competition.Channels != 3 || c1.PeerAlias != "synthetic peer" || hasSource(again, "lnd.graph.node") {
 		t.Errorf("cached competition = %+v, sources %+v", c1.Competition, again.Sources)
 	}
 }
 
 func TestCompetitionErrorIsANoteNotADowngrade(t *testing.T) {
 	f := fakeNode()
-	f.Errors = map[string]error{"NodeChannels": errors.New("graph unavailable")}
+	f.Errors = map[string]error{"GraphNode": errors.New("graph unavailable")}
 	o := observer(f)
 	o.GossipEvery = time.Hour
 	snap, err := o.Snapshot(context.Background())

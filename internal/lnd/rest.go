@@ -231,22 +231,25 @@ func (c *Client) GetChanInfo(ctx context.Context, id contracts.ChanID) (Edge, er
 	return r.edge(), nil
 }
 
-// NodeChannels implements Reader.
-func (c *Client) NodeChannels(ctx context.Context, pubkey string) ([]Edge, error) {
+// GraphNode implements Reader.
+func (c *Client) GraphNode(ctx context.Context, pubkey string) (GraphNode, error) {
 	if !isHexPubkey(pubkey) {
-		return nil, fmt.Errorf("lnd: %q is not a node public key", pubkey)
+		return GraphNode{}, fmt.Errorf("lnd: %q is not a node public key", pubkey)
 	}
 	var r struct {
+		Node struct {
+			Alias string `json:"alias"`
+		} `json:"node"`
 		Channels []wireEdge `json:"channels"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/v1/graph/node/"+pubkey+"?include_channels=true", nil, &r); err != nil {
-		return nil, err
+		return GraphNode{}, err
 	}
-	out := make([]Edge, 0, len(r.Channels))
+	n := GraphNode{Alias: r.Node.Alias, Channels: make([]Edge, 0, len(r.Channels))}
 	for _, e := range r.Channels {
-		out = append(out, e.edge())
+		n.Channels = append(n.Channels, e.edge())
 	}
-	return out, nil
+	return n, nil
 }
 
 // isHexPubkey reports whether s is a compressed public key in hex, so it is

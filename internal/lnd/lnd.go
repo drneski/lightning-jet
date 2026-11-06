@@ -74,6 +74,14 @@ type Reader interface {
 	// ForwardingHistory returns every forward in [start, end), across as many
 	// pages as LND needs.
 	ForwardingHistory(ctx context.Context, start, end time.Time) ([]Forward, error)
-	// NodeChannels returns a node's public channels as the graph knows them.
-	NodeChannels(ctx context.Context, pubkey string) ([]Edge, error)
+	// GraphNode returns a node's alias and public channels as the graph knows
+	// them.
+	GraphNode(ctx context.Context, pubkey string) (GraphNode, error)
+}
+
+// GraphNode is a node as gossip describes it. The alias is whatever the node
+// announced: untrusted text, up to 32 bytes.
+type GraphNode struct {
+	Alias    string
+	Channels []Edge
 }

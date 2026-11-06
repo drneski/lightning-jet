@@ -40,8 +40,11 @@ type Source struct {
 
 // ChannelObservation is what a snapshot saw of one channel.
 type ChannelObservation struct {
-	ChanID       ChanID       `json:"chan_id"`
-	Peer         string       `json:"peer"`
+	ChanID ChanID `json:"chan_id"`
+	Peer   string `json:"peer"`
+	// PeerAlias is the alias the peer announced in gossip, when it was read:
+	// untrusted text the peer chose.
+	PeerAlias    string       `json:"peer_alias,omitempty"`
 	Active       bool         `json:"active"`
 	CapacityMsat MilliSat     `json:"capacity_msat"`
 	LocalMsat    MilliSat     `json:"local_msat"`
