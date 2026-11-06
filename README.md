@@ -54,9 +54,11 @@ jet run
 Then:
 - `jet status` summarizes the latest cycle and what is being recorded;
 - `jet explain <channel id>` explains a channel's latest decision;
-- `jet report` shows each channel's economics: fees earned and their yield on
-  capacity, forwards that failed for lack of balance, the forecast, what
-  competing channels charge, and the latest decision;
+- `jet report` shows each channel's economics, by peer name: fees earned and
+  their yield on capacity, forwards that failed for lack of balance, the
+  forecast, what competing channels charge, and the latest decision.
+  `--raw` prints every exact value as tab-separated rows, and `--json` the
+  whole report;
 - `jet health` checks that cycles and both streams are current, and exits 1 if
   they aren't.
 
