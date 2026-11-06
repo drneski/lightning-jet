@@ -322,14 +322,7 @@ func cmdStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		if c.CapacityMsat > 0 {
 			local = fmt.Sprintf("%d%%", int64(c.LocalMsat)*100/int64(c.CapacityMsat))
 		}
-		result := "no decision recorded"
-		switch {
-		case c.Abstained != "":
-			result = "abstained: " + strings.ReplaceAll(string(c.Abstained), "_", " ")
-		case c.Proposal != nil:
-			result = fmt.Sprintf("proposed %d to %d ppm: %s", c.Proposal.ObservedFeePPM, c.Proposal.FeePPM, c.Verdict)
-		}
-		fmt.Fprintf(stdout, "%-20s %5s  %s\n", c.ChanID, local, result)
+		fmt.Fprintf(stdout, "%-20s %5s  %s\n", c.ChanID, local, c.Result())
 	}
 	return nil
 }

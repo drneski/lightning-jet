@@ -466,6 +466,18 @@ type ChannelStatus struct {
 	Verdict      contracts.Verdict
 }
 
+// Result says what the cycle did with the channel, in the words jet status and
+// jet report use.
+func (c ChannelStatus) Result() string {
+	switch {
+	case c.Abstained != "":
+		return "abstained: " + strings.ReplaceAll(string(c.Abstained), "_", " ")
+	case c.Proposal != nil:
+		return fmt.Sprintf("proposed %d to %d ppm: %s", c.Proposal.ObservedFeePPM, c.Proposal.FeePPM, c.Verdict)
+	}
+	return "no decision recorded"
+}
+
 // LatestStatus returns a summary of the most recent recorded cycle.
 func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 	snap, err := getRecord[contracts.Snapshot](ctx, s.db, `SELECT record FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT ?`, 1)
