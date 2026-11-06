@@ -306,8 +306,8 @@ of the value. Flags override the file.
 
 **Talking to Jet:**
 
-- **The CLI:** `jet run`, `jet status`, `jet explain <channel>` and
-  `jet health` now. `jet init` and `jet report` come next, and later
+- **The CLI:** `jet run`, `jet status`, `jet explain <channel>`,
+  `jet report` and `jet health` now. `jet init` comes next, and later
   `jet mode <engine> off|shadow|live` and `jet pause` / `jet resume`.
   - Read-only commands read the database directly; WAL mode allows readers
     alongside the daemon.
@@ -558,7 +558,7 @@ the node's local data directory.
    - authorize it in shadow mode;
    - record the decision and explain it.
 3. **Observe.** Record LND's HTLC and channel streams and the gossip prior, and
-   run unattended under systemd. Then the per-channel economics report
+   run unattended under systemd, then the per-channel economics report
    (`jet report`). Still read-only.
 4. **Fees.** Shadow, then bounded live experiments.
 5. **Rebalancing.** The payment execution specification, then shadow, then live
