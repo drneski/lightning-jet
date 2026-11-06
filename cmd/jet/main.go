@@ -378,8 +378,12 @@ func cmdReport(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	fs := newFlags("report", stderr)
 	c := addCommon(fs)
 	asJSON := fs.Bool("json", false, "print the report as JSON")
+	raw := fs.Bool("raw", false, "print every exact value as tab-separated rows, one per channel")
 	if err := parse(fs, args); err != nil {
 		return err
+	}
+	if *asJSON && *raw {
+		return usageError{errors.New("--json and --raw are two different outputs; pass one")}
 	}
 	cfg, err := c.load()
 	if err != nil {
@@ -406,12 +410,16 @@ func cmdReport(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	r := report.Build(snap, estimates, s)
-	if *asJSON {
+	switch {
+	case *asJSON:
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(r)
+	case *raw:
+		fmt.Fprint(stdout, r.Raw())
+	default:
+		fmt.Fprint(stdout, r.Text())
 	}
-	fmt.Fprint(stdout, r.Text())
 	return nil
 }
 

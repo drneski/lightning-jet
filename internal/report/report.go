@@ -6,10 +6,6 @@
 package report
 
 import (
-	"fmt"
-	"strconv"
-	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
@@ -28,20 +24,36 @@ type Report struct {
 
 // Channel is one channel's economics.
 type Channel struct {
-	ChanID       contracts.ChanID   `json:"chan_id"`
-	Peer         string             `json:"peer"`
+	ChanID contracts.ChanID `json:"chan_id"`
+	// SCID is the channel id as block x transaction x output.
+	SCID string `json:"scid"`
+	Peer string `json:"peer"`
+	// PeerAlias is the alias the peer announced, as recorded: untrusted text.
+	PeerAlias    string             `json:"peer_alias,omitempty"`
 	Active       bool               `json:"active"`
 	CapacityMsat contracts.MilliSat `json:"capacity_msat"`
 	LocalMsat    contracts.MilliSat `json:"local_msat"`
-	FeePPM       *int64             `json:"fee_ppm,omitempty"`
-	Forwards     contracts.Forwards `json:"forwards"`
+	// FeePPM is our outbound fee rate: what we charge to forward out through
+	// the channel.
+	FeePPM   *int64             `json:"out_fee_ppm,omitempty"`
+	Forwards contracts.Forwards `json:"forwards"`
 	// YieldPct is the fees earned over the window, as a yearly percentage of
 	// the channel's capacity.
 	YieldPct    float64                `json:"yield_pct_per_year"`
 	Failures    *contracts.Failures    `json:"failures,omitempty"`
 	Competition *contracts.Competition `json:"competition,omitempty"`
 	Forecast    *Forecast              `json:"forecast,omitempty"`
-	Result      string                 `json:"result"`
+	// Result is the cycle's decision in jet status's words. Abstained, or
+	// Proposal with its Verdict and the rules it failed, say the same in parts.
+	Result    string                     `json:"result"`
+	Abstained contracts.AbstentionReason `json:"abstained,omitempty"`
+	Proposal  *contracts.FeeParameters   `json:"proposal,omitempty"`
+	Verdict   contracts.Verdict          `json:"verdict,omitempty"`
+	Blocked   []string                   `json:"blocked,omitempty"`
+	// Mode is the mode a proposal was decided in, and PriorApprovals the fee
+	// changes to the channel approved in that mode in the 24 hours before.
+	Mode           contracts.Mode `json:"mode,omitempty"`
+	PriorApprovals int            `json:"prior_approvals_24h,omitempty"`
 }
 
 // Forecast is the estimator's outbound revenue forecast for a channel.
@@ -76,9 +88,9 @@ type Totals struct {
 // Build assembles a report from one cycle: its snapshot, the estimates made
 // from it, and the cycle's per-channel results.
 func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *store.Status) *Report {
-	results := map[contracts.ChanID]string{}
+	results := map[contracts.ChanID]store.ChannelStatus{}
 	for _, c := range status.PerChannel {
-		results[c.ChanID] = c.Result()
+		results[c.ChanID] = c
 	}
 	forecasts := map[contracts.ChanID]*Forecast{}
 	var horizon int64
@@ -98,15 +110,16 @@ func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *st
 	t := &r.Totals
 	t.HorizonHours = horizon
 	for _, c := range snap.Channels {
-		ch := Channel{ChanID: c.ChanID, Peer: c.Peer, Active: c.Active, CapacityMsat: c.CapacityMsat, LocalMsat: c.LocalMsat,
-			Forwards: c.Forwards, YieldPct: yield(c.Forwards.OutFeeMsat, c.CapacityMsat, c.Forwards.WindowHours),
-			Failures: c.Failures, Competition: c.Competition, Forecast: forecasts[c.ChanID], Result: results[c.ChanID]}
+		res := results[c.ChanID]
+		ch := Channel{ChanID: c.ChanID, SCID: c.ChanID.SCID(), Peer: c.Peer, PeerAlias: c.PeerAlias, Active: c.Active,
+			CapacityMsat: c.CapacityMsat, LocalMsat: c.LocalMsat, Forwards: c.Forwards,
+			YieldPct: yield(c.Forwards.OutFeeMsat, c.CapacityMsat, c.Forwards.WindowHours),
+			Failures: c.Failures, Competition: c.Competition, Forecast: forecasts[c.ChanID],
+			Result: res.Result(), Abstained: res.Abstained, Proposal: res.Proposal, Verdict: res.Verdict, Blocked: res.Blocked,
+			Mode: res.Mode, PriorApprovals: res.PriorApprovals}
 		if c.OurPolicy != nil {
 			ppm := c.OurPolicy.FeePPM
 			ch.FeePPM = &ppm
-		}
-		if ch.Result == "" {
-			ch.Result = "no decision recorded"
 		}
 		r.Channels = append(r.Channels, ch)
 		r.WindowHours = max(r.WindowHours, c.Forwards.WindowHours)
@@ -147,85 +160,4 @@ func deref(m *contracts.MilliSat) contracts.MilliSat {
 		return 0
 	}
 	return *m
-}
-
-// Text renders the report for a terminal.
-func (r *Report) Text() string {
-	var b strings.Builder
-	t := r.Totals
-	days := r.WindowHours / 24
-	fmt.Fprintf(&b, "Report       %s, the %d days before it (snapshot %s)\n", r.TakenAt.Format("2006-01-02 15:04 MST"), days, r.SnapshotID)
-	fmt.Fprintf(&b, "Node         %d channels, %d active: %s sats, %d%% local\n", t.Channels, t.Active, commas(t.CapacityMsat.Sats()), pct(t.LocalMsat, t.CapacityMsat))
-	fmt.Fprintf(&b, "Earned       %s sats in fees from %d forwards out of %s sats; %s a year on capacity\n",
-		commas(t.OutFeeMsat.Sats()), t.OutCount, commas(t.OutAmountMsat.Sats()), yieldText(t.YieldPct))
-	if t.CoverageHours > 0 || t.BalanceFailures > 0 {
-		fmt.Fprintf(&b, "Failed       %d forwards for lack of balance, %s sats attempted, recorded for %d of %d hours (attempts, not payments)\n",
-			t.BalanceFailures, commas(t.BalanceFailuresMsat.Sats()), t.CoverageHours, r.WindowHours)
-	}
-	if t.Forecasts == 0 {
-		fmt.Fprintf(&b, "Expected     no channel has enough forwards for a forecast\n")
-	} else {
-		fmt.Fprintf(&b, "Expected     %s sats over the next %d days, from the %d of %d channels with a forecast\n",
-			commas(t.ExpectedMsat.Sats()), t.HorizonHours/24, t.Forecasts, t.Channels)
-	}
-
-	if len(r.Channels) == 0 {
-		return b.String()
-	}
-	b.WriteString("\n")
-	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', tabwriter.AlignRight)
-	fmt.Fprintln(w, "Channel\tLocal\tFee ppm\tOut\tEarned\tYield/yr\tFailed\tExpected\tCompeting\t\t")
-	for _, c := range r.Channels {
-		fee, failed, expected, competing := "-", "-", "-", "-"
-		if c.FeePPM != nil {
-			fee = strconv.FormatInt(*c.FeePPM, 10)
-		}
-		if c.Failures != nil {
-			failed = strconv.Itoa(c.Failures.BalanceFailures)
-		}
-		if c.Forecast != nil {
-			expected = commas(c.Forecast.ExpectedMsat.Sats())
-		}
-		if c.Competition != nil && c.Competition.Channels > 0 {
-			competing = strconv.FormatInt(c.Competition.FeePPMMedian, 10)
-		}
-		result := c.Result
-		if !c.Active {
-			result = "inactive; " + result
-		}
-		fmt.Fprintf(w, "%s\t%d%%\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t\t%s\n", c.ChanID, pct(c.LocalMsat, c.CapacityMsat), fee,
-			c.Forwards.OutCount, commas(c.Forwards.OutFeeMsat.Sats()), yieldText(c.YieldPct), failed, expected, competing, result)
-	}
-	w.Flush()
-	fmt.Fprintf(&b, "\nEarned, Out and Failed cover the %d days before the cycle. Expected is the next %d days, in sats.\n",
-		days, t.HorizonHours/24)
-	b.WriteString("Competing is the median fee of the other channels into the same peer: a prior, not a price.\n")
-	return b.String()
-}
-
-func yieldText(pctPerYear float64) string {
-	return strconv.FormatFloat(pctPerYear, 'f', 2, 64) + "%"
-}
-
-func pct(part, whole contracts.MilliSat) int64 {
-	if whole <= 0 {
-		return 0
-	}
-	return int64(part) * 100 / int64(whole)
-}
-
-// commas formats n with thousands separators.
-func commas(n int64) string {
-	s := strconv.FormatInt(n, 10)
-	neg := strings.HasPrefix(s, "-")
-	if neg {
-		s = s[1:]
-	}
-	for i := len(s) - 3; i > 0; i -= 3 {
-		s = s[:i] + "," + s[i:]
-	}
-	if neg {
-		s = "-" + s
-	}
-	return s
 }

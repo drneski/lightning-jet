@@ -20,19 +20,20 @@ func TestBuild(t *testing.T) {
 	busy, quiet := window, window
 	busy.OutCount, busy.OutAmountMsat, busy.OutFeeMsat = 20, 9_000_000_000, 3_650_000
 	snap := &contracts.Snapshot{ID: "s1", TakenAt: at, Channels: []contracts.ChannelObservation{
-		{ChanID: 1, Active: true, CapacityMsat: 10_000_000_000, LocalMsat: 100_000_000, OurPolicy: &contracts.Policy{FeePPM: 400}, Forwards: busy,
+		{ChanID: contracts.ChanID(uint64(800000)<<40 | 7<<16 | 1), Peer: "02aaaaaaaaaaaaaaaa", PeerAlias: "Big\x1b[31m Peer\u202e", Active: true, CapacityMsat: 10_000_000_000, LocalMsat: 100_000_000, OurPolicy: &contracts.Policy{FeePPM: 400}, Forwards: busy,
 			Failures:    &contracts.Failures{WindowHours: 720, CoverageHours: 240, BalanceFailures: 8, BalanceFailuresMsat: 1_200_000_000},
 			Competition: &contracts.Competition{Channels: 364, FeePPMMedian: 500}},
-		{ChanID: 2, Active: false, CapacityMsat: 2_000_000_000, LocalMsat: 1_960_000_000, Forwards: quiet,
+		{ChanID: 2, Peer: "03bbbbbbbbbbbbbbbb", Active: false, CapacityMsat: 2_000_000_000, LocalMsat: 1_960_000_000, Forwards: quiet,
 			Failures: &contracts.Failures{WindowHours: 720, CoverageHours: 240}},
 	}}
 	estimates := []*contracts.Estimate{
-		{ChanID: 1, Kind: economics.KindOutboundRevenue, HorizonHours: 336, ExpectedMsat: mp(1_400_000), LowMsat: mp(500_000), HighMsat: mp(2_900_000),
+		{ChanID: contracts.ChanID(uint64(800000)<<40 | 7<<16 | 1), Kind: economics.KindOutboundRevenue, HorizonHours: 336, ExpectedMsat: mp(1_400_000), LowMsat: mp(500_000), HighMsat: mp(2_900_000),
 			Interval: "p10-p90", EconomicConfidence: contracts.EconomicConfidence{Level: contracts.ConfidenceMedium}},
 		{ChanID: 2, Kind: economics.KindOutboundRevenue, HorizonHours: 336},
 	}
 	status := &store.Status{PerChannel: []store.ChannelStatus{
-		{ChanID: 1, Proposal: &contracts.FeeParameters{ObservedFeePPM: 400, FeePPM: 440}, Verdict: contracts.Approved},
+		{ChanID: contracts.ChanID(uint64(800000)<<40 | 7<<16 | 1), Proposal: &contracts.FeeParameters{ObservedFeePPM: 400, FeePPM: 440},
+			Verdict: contracts.Rejected, Blocked: []string{"cooldown", "daily_changes"}, Mode: contracts.ModeShadow, PriorApprovals: 2},
 		{ChanID: 2, Abstained: contracts.AbstentionReason("insufficient_evidence")},
 	}}
 
@@ -52,16 +53,51 @@ func TestBuild(t *testing.T) {
 
 	text := r.Text()
 	for _, want := range []string{
-		"the 30 days before it (snapshot s1)",
-		"2 channels, 1 active: 12,000,000 sats, 17% local",
-		"3,650 sats in fees from 20 forwards out of 9,000,000 sats; 0.37% a year on capacity",
-		"8 forwards for lack of balance, 1,200,000 sats attempted, recorded for 240 of 720 hours",
-		"1,400 sats over the next 14 days, from the 1 of 2 channels with a forecast",
-		"proposed 400 to 440 ppm: approved",
-		"inactive; abstained: insufficient evidence",
+		"Lightning Jet report for the 30 days to 2026-11-06 17:00 UTC",
+		"2 channels, 1 active. 12M sats of capacity, 17% of it on our side.",
+		"3,650 sats in fees from 20 forwards (9M sats routed): 0.37% a year on capacity.",
+		"8 forwards failed for lack of balance on our side, 1.2M sats in all.",
+		"1,400 sats expected, from the one channel with enough history to forecast.",
+		"Big[31m Peer   800000x7x1  ░░░░░░░░░░   1%      400     500   3,650       8     1,400  would raise to 440 ppm; already approved twice in shadow in the last 24h",
+		"inactive; too few forwards to judge",
+		"Big[31m Peer earns 100% of the fees but is nearly empty on our side (1%)",
+		"1 channel forwarded nothing out in 30 days while holding 2M sats on our side:",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.ContainsAny(text, "\x1b\u202e") {
+		t.Error("an alias put a control character on the terminal")
+	}
+	// The busier channel comes first.
+	if strings.Index(text, "800000x7x1") > strings.Index(text, "0x0x2") {
+		t.Error("channels are not ordered by earnings")
+	}
+
+	raw := strings.Split(r.Raw(), "\n")
+	if !strings.HasPrefix(raw[0], "chan_id\tscid\tpeer\tpeer_alias") || len(strings.Split(raw[1], "\t")) != len(rawColumns) {
+		t.Errorf("raw = %q", raw[:2])
+	}
+	if !strings.Contains(raw[1], "\t3650000\t") || !strings.HasSuffix(raw[1], "\tcooldown,daily_changes\tshadow\t2") {
+		t.Errorf("raw row = %q", raw[1])
+	}
+}
+
+// A proposal held by a limit that doesn't count history is held, in shadow
+// or not; one held by its history in live mode is held too.
+func TestHeld(t *testing.T) {
+	for _, tc := range []struct {
+		c    Channel
+		want string
+	}{
+		{Channel{Blocked: []string{"cooldown", "fee_ppm_bounds"}, Mode: contracts.ModeShadow, PriorApprovals: 1},
+			"already approved once in shadow in the last 24h; held: fee bounds"},
+		{Channel{Blocked: []string{"fee_step"}, Mode: contracts.ModeShadow}, "held: step limit"},
+		{Channel{Blocked: []string{"cooldown"}, Mode: contracts.ModeLive, PriorApprovals: 1}, "held: cooldown"},
+	} {
+		if got := held(tc.c); got != tc.want {
+			t.Errorf("held(%v) = %q, want %q", tc.c.Blocked, got, tc.want)
 		}
 	}
 }
