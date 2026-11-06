@@ -155,3 +155,24 @@ func TestDecisionVerdictMustMatchRules(t *testing.T) {
 		t.Errorf("a rejection with a failed rule: %v", err)
 	}
 }
+
+func TestChanIDForms(t *testing.T) {
+	id := ChanID(uint64(800000)<<40 | 1234<<16 | 1)
+	if got := id.SCID(); got != "800000x1234x1" {
+		t.Errorf("SCID() = %q", got)
+	}
+	for _, s := range []string{id.String(), "800000x1234x1"} {
+		if got, err := ParseChanID(s); err != nil || got != id {
+			t.Errorf("ParseChanID(%q) = %v, %v", s, got, err)
+		}
+	}
+	for _, bad := range []string{"800000x1234", "800000x1234x70000", "16777216x0x0", "1x2x3x4", "abc"} {
+		if _, err := ParseChanID(bad); err == nil {
+			t.Errorf("ParseChanID(%q) accepted", bad)
+		}
+	}
+	var c ChanID
+	if err := c.UnmarshalJSON([]byte(`"800000x1234x1"`)); err == nil {
+		t.Error("JSON accepted a channel id that isn't decimal")
+	}
+}

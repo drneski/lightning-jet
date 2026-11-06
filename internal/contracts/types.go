@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,8 +21,23 @@ func (m MilliSat) Sats() int64 { return int64(m) / 1000 }
 // because it exceeds the integer range some JSON readers handle exactly.
 type ChanID uint64
 
-// ParseChanID parses a short channel id written in decimal.
+// ParseChanID parses a short channel id written in decimal, as LND writes it,
+// or as block x transaction x output, as BOLT 7 and explorers write it.
 func ParseChanID(s string) (ChanID, error) {
+	if block, rest, ok := strings.Cut(s, "x"); ok {
+		tx, out, ok := strings.Cut(rest, "x")
+		b, errB := strconv.ParseUint(block, 10, 24)
+		t, errT := strconv.ParseUint(tx, 10, 24)
+		o, errO := strconv.ParseUint(out, 10, 16)
+		if !ok || errB != nil || errT != nil || errO != nil {
+			return 0, fmt.Errorf("invalid channel id %q", s)
+		}
+		return ChanID(b<<40 | t<<16 | o), nil
+	}
+	return parseDecimal(s)
+}
+
+func parseDecimal(s string) (ChanID, error) {
 	v, err := strconv.ParseUint(s, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid channel id %q", s)
@@ -30,6 +46,13 @@ func ParseChanID(s string) (ChanID, error) {
 }
 
 func (c ChanID) String() string { return strconv.FormatUint(uint64(c), 10) }
+
+// SCID writes the id as block x transaction x output: where the funding
+// transaction confirmed, and which of its outputs is the channel.
+func (c ChanID) SCID() string {
+	v := uint64(c)
+	return fmt.Sprintf("%dx%dx%d", v>>40, v>>16&0xffffff, v&0xffff)
+}
 
 // FundingHeight returns the block the channel's funding transaction confirmed
 // in, which the short channel id encodes in its top 24 bits.
@@ -42,7 +65,7 @@ func (c *ChanID) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return fmt.Errorf("channel id must be a decimal string: %w", err)
 	}
-	v, err := ParseChanID(s)
+	v, err := parseDecimal(s)
 	if err != nil {
 		return err
 	}
