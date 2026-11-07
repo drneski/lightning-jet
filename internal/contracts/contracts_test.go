@@ -100,6 +100,35 @@ func TestEstimateValidate(t *testing.T) {
 	if err := outside.Validate(); err == nil {
 		t.Error("an expected value outside its range validated")
 	}
+
+	rate := validEstimate()
+	rate.Kind = "replacement_cost"
+	rate.ExpectedMsat, rate.LowMsat, rate.HighMsat = nil, nil, nil
+	p := func(v int64) *int64 { return &v }
+	rate.ExpectedPPM, rate.LowPPM, rate.HighPPM = p(605), p(600), p(1000)
+	if err := rate.Validate(); err != nil {
+		t.Errorf("valid rate estimate: %v", err)
+	}
+	both := rate
+	both.ExpectedMsat, both.LowMsat, both.HighMsat = ptr(100), ptr(50), ptr(150)
+	if err := both.Validate(); err == nil {
+		t.Error("an estimate stating both amounts and a rate validated")
+	}
+	partial := rate
+	partial.HighPPM = nil
+	if err := partial.Validate(); err == nil {
+		t.Error("a rate without its high validated")
+	}
+	low := rate
+	low.ExpectedPPM = p(590)
+	if err := low.Validate(); err == nil {
+		t.Error("an expected rate below its low validated")
+	}
+	noneRate := rate
+	noneRate.EconomicConfidence.Level = ConfidenceNone
+	if err := noneRate.Validate(); err == nil {
+		t.Error("a rate at confidence none validated")
+	}
 }
 
 func validIntent() Intent {

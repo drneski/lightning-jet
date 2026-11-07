@@ -150,7 +150,9 @@ func (s *Snapshot) Seal() error {
 }
 
 // Estimate is what an estimator believes about one channel, with how much it
-// should be believed. What the value fields mean depends on Kind.
+// should be believed. What the value fields mean depends on Kind. A rate,
+// such as a replacement_cost, is stated in ExpectedPPM, LowPPM and HighPPM, in
+// parts per million of the amount moved, in place of the amounts.
 type Estimate struct {
 	ID                 string             `json:"id"`
 	Schema             string             `json:"schema"`
@@ -162,6 +164,9 @@ type Estimate struct {
 	ExpectedMsat       *MilliSat          `json:"expected_msat,omitempty"`
 	LowMsat            *MilliSat          `json:"low_msat,omitempty"`
 	HighMsat           *MilliSat          `json:"high_msat,omitempty"`
+	ExpectedPPM        *int64             `json:"expected_ppm,omitempty"`
+	LowPPM             *int64             `json:"low_ppm,omitempty"`
+	HighPPM            *int64             `json:"high_ppm,omitempty"`
 	Interval           string             `json:"interval,omitempty"`
 	EconomicConfidence EconomicConfidence `json:"economic_confidence"`
 	DataQuality        DataQuality        `json:"data_quality"`
@@ -344,10 +349,19 @@ func (e *Estimate) Validate() error {
 	req(&errs, e.HorizonHours > 0, "estimate: horizon must be positive")
 	req(&errs, e.EconomicConfidence.Level != "", "estimate: missing economic confidence")
 	req(&errs, e.DataQuality.Level != "", "estimate: missing data quality")
-	hasValue := e.ExpectedMsat != nil || e.LowMsat != nil || e.HighMsat != nil
-	if e.EconomicConfidence.Level == ConfidenceNone {
-		req(&errs, !hasValue, "estimate: confidence none must not state a value")
-	} else {
+	amounts := e.ExpectedMsat != nil || e.LowMsat != nil || e.HighMsat != nil
+	rate := e.ExpectedPPM != nil || e.LowPPM != nil || e.HighPPM != nil
+	switch {
+	case e.EconomicConfidence.Level == ConfidenceNone:
+		req(&errs, !amounts && !rate, "estimate: confidence none must not state a value")
+	case rate:
+		req(&errs, !amounts, "estimate: a forecast states amounts or a rate, not both")
+		req(&errs, e.ExpectedPPM != nil && e.LowPPM != nil && e.HighPPM != nil && e.Interval != "",
+			"estimate: a rate needs expected, low, high and interval")
+		if e.ExpectedPPM != nil && e.LowPPM != nil && e.HighPPM != nil {
+			req(&errs, *e.LowPPM <= *e.ExpectedPPM && *e.ExpectedPPM <= *e.HighPPM, "estimate: expected must lie within low and high")
+		}
+	default:
 		req(&errs, e.ExpectedMsat != nil && e.LowMsat != nil && e.HighMsat != nil && e.Interval != "",
 			"estimate: a forecast needs expected, low, high and interval")
 		if e.ExpectedMsat != nil && e.LowMsat != nil && e.HighMsat != nil {

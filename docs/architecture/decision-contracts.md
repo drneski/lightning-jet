@@ -133,6 +133,7 @@ believed.
 | `horizon_hours` | The period the estimate covers |
 | `expected_msat` | What the kind defines. A value estimate gives the expected **incremental** value over the horizon, compared with doing nothing. A baseline, such as `outbound_revenue` (what the channel earns if nothing changes), gives the expected amount. A cost estimate gives the expected cost. |
 | `low_msat`, `high_msat`, `interval` | The range, and what it is (for example `p10-p90`). At economic confidence `none`, all three value fields are omitted: there is no forecast to state. |
+| `expected_ppm`, `low_ppm`, `high_ppm` | A rate in place of the amounts, in parts per million of the amount moved, for a kind such as `replacement_cost`. An estimate states amounts or a rate, never both, and neither at confidence `none`. |
 | `economic_confidence` | Level and basis (sample sizes, windows) |
 | `data_quality` | Level and issues, carried from the snapshot for the inputs used |
 | `evidence` | The observations behind it, each with its kind, window, count and source, including priors such as gossip fees, labeled as priors |
