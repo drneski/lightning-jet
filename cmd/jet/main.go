@@ -307,6 +307,18 @@ func cmdStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintf(stdout, " (%s)", strings.Join(reasons, ", "))
 	}
 	fmt.Fprintln(stdout)
+	if n := len(s.Refills); n > 0 {
+		var proposed, approved int
+		for _, r := range s.Refills {
+			if r.Intent != nil {
+				proposed++
+				if r.Decision != nil && r.Decision.Verdict == contracts.Approved {
+					approved++
+				}
+			}
+		}
+		fmt.Fprintf(stdout, "Refills      %d evaluated: %d proposed (%d approved), %d abstained\n", n, proposed, approved, n-proposed)
+	}
 
 	now := time.Now().UTC()
 	day := now.Add(-24 * time.Hour)
