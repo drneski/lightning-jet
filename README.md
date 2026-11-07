@@ -25,7 +25,9 @@ The architecture is settled; see
   happen, including the forwards that failed for lack of balance, with any
   gaps in the record known. It reads competitors' advertised fees from the
   graph as a prior. It runs unattended under a hardened systemd unit.
-- **Refills, in shadow.** Jet estimates what refilling each channel costs. For
+- **Refills, in shadow.** Jet estimates what refilling each channel costs, from
+  the refills in LND's payment history when any succeeded, and otherwise from
+  advertised fees, corrected by the attempts that failed. For
   each depleted channel with enough traffic, it sizes a refill to the demand
   the channel shows, picks a source with liquidity to spare, and proposes the
   refill only when, at the current fee, it earns more than it costs at the
