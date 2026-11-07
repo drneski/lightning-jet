@@ -21,6 +21,7 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/observe"
 	"github.com/drneski/lightning-jet/v2/internal/store"
 	"github.com/drneski/lightning-jet/v2/internal/strategy/fee"
+	"github.com/drneski/lightning-jet/v2/internal/strategy/refill"
 )
 
 const (
@@ -78,6 +79,7 @@ func newEngine(t *testing.T, reader lnd.Reader, c *clock) (*Engine, *store.Store
 		Observer:   &observe.Observer{LND: reader, Now: c.now, NewID: gen.ID, Window: 30 * 24 * time.Hour, CallTimeout: time.Second},
 		Estimator:  &economics.Estimator{Horizon: 14 * 24 * time.Hour, Now: c.now, NewID: gen.ID},
 		Strategy:   &fee.Strategy{Config: fee.DefaultConfig, Mode: contracts.ModeShadow, Now: c.now, NewID: gen.ID},
+		Refills:    &refill.Strategy{Config: refill.DefaultConfig, Mode: contracts.ModeShadow, Now: c.now, NewID: gen.ID},
 		Authorizer: &limits.Authorizer{Config: limits.DefaultConfig, History: st, Now: c.now, NewID: gen.ID},
 		Store:      st, Now: c.now, NewID: gen.ID, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}, st
@@ -240,5 +242,31 @@ func TestStuckOnlyWhileACycleRunsTooLong(t *testing.T) {
 	}
 	if !e.Stuck(c.t.Add(16*time.Minute), 15*time.Minute) {
 		t.Error("a sixteen-minute cycle is not reported stuck")
+	}
+}
+
+// A depleted channel gets a refill evaluation as well as a fee one, and the
+// two are recorded apart. Without the gossip graph there is no way to price a
+// refill, so here it is an abstention.
+func TestADepletedChannelIsEvaluatedForARefill(t *testing.T) {
+	c := &clock{time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)}
+	f := fakeNode(c.t)
+	f.Channels[0].LocalSat, f.Channels[0].RemoteSat = 100_000, 4_890_000 // fullBusy, now 2% local
+	e, st := newEngine(t, f, c)
+	ctx := context.Background()
+	sum, err := e.Cycle(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Refills != 1 || sum.RefillsApproved != 0 || sum.Intents != 1 {
+		t.Fatalf("summary = %+v", sum)
+	}
+	status, err := st.LatestStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Refills) != 1 || status.Refills[0].ChanID != fullBusy || status.Refills[0].Abstention == nil ||
+		status.Refills[0].Abstention.Reason != contracts.InsufficientEvidence || status.Approved+status.Rejected != 1 {
+		t.Errorf("status = %+v, refills %+v", status, status.Refills)
 	}
 }

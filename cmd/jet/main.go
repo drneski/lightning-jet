@@ -36,6 +36,7 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/report"
 	"github.com/drneski/lightning-jet/v2/internal/store"
 	"github.com/drneski/lightning-jet/v2/internal/strategy/fee"
+	"github.com/drneski/lightning-jet/v2/internal/strategy/refill"
 )
 
 // version is set at release time with -ldflags "-X main.version=<tag>".
@@ -178,8 +179,8 @@ func cmdRun(ctx context.Context, args []string, stderr io.Writer) error {
 	if cfg.TLSCert == "" || cfg.Macaroon == "" {
 		return usageError{errors.New("LND's tls.cert and readonly.macaroon are required: set tls_cert and macaroon in [lnd], or pass --tls-cert and --macaroon")}
 	}
-	if cfg.FeesMode == contracts.ModeOff {
-		fmt.Fprintln(stderr, "jet run: the fees engine is off, so there is nothing to evaluate")
+	if cfg.FeesMode == contracts.ModeOff && cfg.RebalanceMode == contracts.ModeOff {
+		fmt.Fprintln(stderr, "jet run: the fees and rebalance engines are off, so there is nothing to evaluate")
 		return nil
 	}
 
@@ -206,9 +207,16 @@ func cmdRun(ctx context.Context, args []string, stderr io.Writer) error {
 		Observer: &observe.Observer{LND: client, Now: now, NewID: gen.ID, Window: time.Duration(cfg.WindowDays) * 24 * time.Hour,
 			CallTimeout: 30 * time.Second, Failures: st, GossipEvery: time.Duration(cfg.GossipRefreshHours) * time.Hour},
 		Estimator:  &economics.Estimator{Horizon: 14 * 24 * time.Hour, Now: now, NewID: gen.ID},
-		Strategy:   &fee.Strategy{Config: strat, Mode: cfg.FeesMode, Now: now, NewID: gen.ID},
 		Authorizer: &limits.Authorizer{Config: lim, History: st, Now: now, NewID: gen.ID},
 		Store:      st, Now: now, NewID: gen.ID, Log: log,
+	}
+	if cfg.FeesMode != contracts.ModeOff {
+		e.Strategy = &fee.Strategy{Config: strat, Mode: cfg.FeesMode, Now: now, NewID: gen.ID}
+	}
+	if cfg.RebalanceMode != contracts.ModeOff {
+		rs := refill.DefaultConfig
+		rs.IntentTTL, rs.Revisit = cfg.Interval, cfg.Interval
+		e.Refills = &refill.Strategy{Config: rs, Mode: cfg.RebalanceMode, Now: now, NewID: gen.ID}
 	}
 	if *once {
 		sum, err := e.Cycle(ctx)
@@ -216,11 +224,13 @@ func cmdRun(ctx context.Context, args []string, stderr io.Writer) error {
 			return err
 		}
 		log.Info("cycle recorded", "snapshot", sum.SnapshotID, "channels", sum.Channels, "intents", sum.Intents,
-			"approved", sum.Approved, "rejected", sum.Rejected, "abstentions", sum.Abstentions)
+			"approved", sum.Approved, "rejected", sum.Rejected, "abstentions", sum.Abstentions,
+			"refills", sum.Refills, "refills_approved", sum.RefillsApproved)
 		return nil
 	}
 
-	log.Info("jet running", "version", version, "lnd", cfg.RESTAddress, "interval", cfg.Interval.String(), "fees", cfg.FeesMode, "data", cfg.DataDir)
+	log.Info("jet running", "version", version, "lnd", cfg.RESTAddress, "interval", cfg.Interval.String(), "fees", cfg.FeesMode,
+		"rebalance", cfg.RebalanceMode, "data", cfg.DataDir)
 	rec := &record.Recorder{LND: client, Store: st, Now: now, Log: log,
 		MinBackoff: time.Second, MaxBackoff: 5 * time.Minute, AliveEvery: time.Minute}
 	var wg sync.WaitGroup
