@@ -142,8 +142,10 @@ Fees and rebalancing share it.
   balances, our and peers' policies over time, and refill outcomes, which lose
   weight with age.
 - **Replacement cost** per channel is the median ppm of recent successful refills
-  into it. Without any, it is the higher of the peer's fee plus a buffer and the
-  cheapest failed route.
+  into it. Without any, it is a prior from advertised fees: the peer's fee to us,
+  which every refill pays on its last hop and so no refill costs less, plus the
+  cheapest way into the peer, through another of our peers where one has a
+  channel into it. Once Jet tries refills, the cheapest failed route raises it.
 - **Marginal value of outbound liquidity** per channel is computed at different
   balances, over a stated horizon. It is the *incremental* routing revenue the
   liquidity enables compared with doing nothing, counting reuse when flow is

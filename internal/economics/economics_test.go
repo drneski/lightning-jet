@@ -121,3 +121,51 @@ func TestFailuresAndCompetitionBecomeEvidence(t *testing.T) {
 		t.Errorf("expected = %d", *est.ExpectedMsat)
 	}
 }
+
+func TestReplacementCost(t *testing.T) {
+	ch := channel(12, 6_000_000)
+	ch.PeerPolicy = &contracts.Policy{FeePPM: 600}
+	ch.Competition = &contracts.Competition{Channels: 120, FeePPMP25: 80, FeePPMMedian: 400, FeePPMP75: 1200}
+	snap := snapshot()
+
+	// Without a neighbor, the way in is the cheapest quarter of the channels
+	// into the peer.
+	est := estimator().ReplacementCost(snap, ch)
+	if err := est.Validate(); err != nil {
+		t.Fatalf("estimate does not validate: %v", err)
+	}
+	if *est.LowPPM != 600 || *est.ExpectedPPM != 680 || *est.HighPPM != 1000 || est.Kind != KindReplacementCost ||
+		est.EconomicConfidence.Level != contracts.ConfidenceLow {
+		t.Errorf("estimate = %d / %d / %d, %+v", *est.LowPPM, *est.ExpectedPPM, *est.HighPPM, est.EconomicConfidence)
+	}
+
+	// A neighbor makes the two-hop refill the expected way in, and names the
+	// channel to it.
+	via := contracts.ChanID(800123<<40 | 45<<16 | 2)
+	snap.Channels = []contracts.ChannelObservation{ch, {ChanID: via, Peer: "02cc"}}
+	ch.Competition.Neighbor = &contracts.Neighbor{Pubkey: "02cc", FeePPM: 5}
+	est = estimator().ReplacementCost(snap, ch)
+	if *est.LowPPM != 600 || *est.ExpectedPPM != 605 || *est.HighPPM != 1000 {
+		t.Errorf("with a neighbor = %d / %d / %d", *est.LowPPM, *est.ExpectedPPM, *est.HighPPM)
+	}
+	if last := est.Evidence[len(est.Evidence)-1]; last.Kind != "neighbor_fee" || !last.Prior ||
+		last.Summary != "the peer of our channel 800123x45x2 charges 5 ppm to forward into the peer" {
+		t.Errorf("neighbor evidence = %+v", last)
+	}
+
+	// No value without the peer's fee, when the peer won't forward to us, or
+	// when nothing else leads into it.
+	for name, change := range map[string]func(c *contracts.ChannelObservation){
+		"unknown peer fee": func(c *contracts.ChannelObservation) { c.PeerPolicy = nil },
+		"disabled":         func(c *contracts.ChannelObservation) { c.PeerPolicy = &contracts.Policy{FeePPM: 600, Disabled: true} },
+		"no way in":        func(c *contracts.ChannelObservation) { c.Competition = &contracts.Competition{} },
+		"no graph":         func(c *contracts.ChannelObservation) { c.Competition = nil },
+	} {
+		c := ch
+		change(&c)
+		est := estimator().ReplacementCost(snap, c)
+		if err := est.Validate(); err != nil || est.EconomicConfidence.Level != contracts.ConfidenceNone {
+			t.Errorf("%s: confidence %s, err %v", name, est.EconomicConfidence.Level, err)
+		}
+	}
+}

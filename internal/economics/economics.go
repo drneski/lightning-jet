@@ -14,7 +14,7 @@ import (
 // The estimator's identity, recorded on every estimate it makes.
 const (
 	EstimatorName    = "flow"
-	EstimatorVersion = "0.2.0"
+	EstimatorVersion = "0.3.0"
 )
 
 // KindOutboundRevenue is the routing revenue a channel's outbound liquidity is
@@ -132,6 +132,82 @@ func (e *Estimator) OutboundRevenue(snap *contracts.Snapshot, ch contracts.Chann
 	low := contracts.MilliSat(int64(expected) * max(0, 1000-k) / 1000)
 	high := contracts.MilliSat(int64(expected) * (1000 + k) / 1000)
 	est.ExpectedMsat, est.LowMsat, est.HighMsat, est.Interval = &expected, &low, &high, "p10-p90"
+	return est
+}
+
+// KindReplacementCost is what putting liquidity back on our side of a channel
+// costs: a circular refill's fees, as a rate in ppm of the amount moved.
+const KindReplacementCost = "replacement_cost"
+
+// ReplacementCost estimates what refilling the channel costs. Until Jet has
+// refilled it, the estimate is a prior from advertised fees. Every refill
+// ends with the hop from the peer to us, paid at the peer's fee, so that fee
+// is the low: no refill costs less. The expected cost adds the cheapest way
+// into the peer: through another of our peers when one has a channel into
+// it, the two-hop refill, and otherwise the cheapest quarter of the channels
+// into it. The high adds the median of the channels into it instead, for
+// when the cheap ways in lack the liquidity.
+func (e *Estimator) ReplacementCost(snap *contracts.Snapshot, ch contracts.ChannelObservation) *contracts.Estimate {
+	est := &contracts.Estimate{
+		ID: e.NewID(), Schema: contracts.SchemaEstimate, ChanID: ch.ChanID, Kind: KindReplacementCost,
+		SnapshotID: snap.ID, Estimator: contracts.Component{Name: EstimatorName, Version: EstimatorVersion},
+		HorizonHours: int64(e.Horizon / time.Hour), DataQuality: ch.DataQuality, ComputedAt: contracts.Timestamp(e.Now()),
+		Evidence: []contracts.Evidence{},
+		Assumptions: []string{
+			"fees stay as advertised",
+			"a route into the peer has the liquidity to carry the refill",
+			"base fees are left out: on a refill of 100,000 sats, a 1 sat base fee adds 10 ppm",
+		},
+	}
+	none := func(basis string) *contracts.Estimate {
+		est.EconomicConfidence = contracts.EconomicConfidence{Level: contracts.ConfidenceNone, Basis: basis}
+		return est
+	}
+	p := ch.PeerPolicy
+	switch {
+	case ch.DataQuality.Level == contracts.DataInsufficient:
+		return none("the inputs are insufficient for an estimate")
+	case p == nil:
+		return none("the peer's fee to us is unknown")
+	case p.Disabled:
+		return none("the peer has disabled forwarding to us, so no refill can come back through it")
+	}
+	est.Evidence = append(est.Evidence, contracts.Evidence{
+		Kind: "peer_fee", Count: 1, Source: "lnd.getchaninfo",
+		Summary: fmt.Sprintf("the peer charges %d ppm and %d msat base to forward to us, the last hop of any refill", p.FeePPM, p.BaseMsat),
+	})
+	c := ch.Competition
+	switch {
+	case c == nil:
+		return none(fmt.Sprintf("the channels into the peer are unknown; a refill costs at least %d ppm, the peer's fee to us", p.FeePPM))
+	case c.Channels == 0:
+		return none("no other channel leads into the peer, so a circular refill has no way in")
+	}
+	est.Evidence = append(est.Evidence, contracts.Evidence{
+		Kind: "competing_fees", Count: c.Channels, Source: "lnd.graph.node", Prior: true,
+		Summary: fmt.Sprintf("%d other channels into the peer advertise %d-%d ppm (median %d)",
+			c.Channels, c.FeePPMP25, c.FeePPMP75, c.FeePPMMedian),
+	})
+
+	way, basis := c.FeePPMP25, "the cheapest quarter of the channels into the peer"
+	if n := c.Neighbor; n != nil {
+		way, basis = n.FeePPM, "the cheapest channel into the peer run by another of our peers, a two-hop refill"
+		via := "another of our peers"
+		for _, o := range snap.Channels {
+			if o.Peer == n.Pubkey {
+				via = "the peer of our channel " + o.ChanID.SCID()
+				break
+			}
+		}
+		est.Evidence = append(est.Evidence, contracts.Evidence{
+			Kind: "neighbor_fee", Count: 1, Source: "lnd.graph.node", Prior: true,
+			Summary: fmt.Sprintf("%s charges %d ppm to forward into the peer", via, n.FeePPM),
+		})
+	}
+	low, expected, high := p.FeePPM, p.FeePPM+way, p.FeePPM+max(way, c.FeePPMMedian)
+	est.LowPPM, est.ExpectedPPM, est.HighPPM, est.Interval = &low, &expected, &high, "advertised fees"
+	est.EconomicConfidence = contracts.EconomicConfidence{Level: contracts.ConfidenceLow,
+		Basis: "advertised fees only, no refill into this channel measured: the peer's fee to us plus " + basis}
 	return est
 }
 
