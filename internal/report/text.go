@@ -78,7 +78,8 @@ func (r *Report) Text() string {
 	b.WriteString("\n" + wrap(fmt.Sprintf("Routed out / in is the sats forwarded out through the channel and in through it. "+
 		"Out fee is what we charge to forward out through the channel. Others is the "+
 		"median out fee of the other channels into the same peer: a prior, not a price. Refill is what putting sats back "+
-		"on our side would cost: the peer's fee to us plus the cheapest way into the peer, from advertised fees. All "+
+		"on our side would cost: the median of the refills into it that succeeded, and without any, the peer's fee to us "+
+		"plus the cheapest way into the peer, from advertised fees, corrected by any refill attempts that failed. All "+
 		"three are in ppm. Earned and "+
 		"Missed cover the %d days, and Next %dd is the forecast. Amounts are in sats.", days, t.HorizonHours/24), "", 80))
 	for _, c := range chans {
