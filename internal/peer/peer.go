@@ -72,8 +72,8 @@ func Find(groups []Group, id contracts.ChanID) (Group, bool) {
 }
 
 // combine makes one observation of a peer's channels, which are in id order.
-// It takes the first channel's id, the oldest, and adds up balances, forwards
-// and failures. Our policy is the enabled one with the highest fee, which is
+// It takes the first channel's id, the oldest, and adds up balances, forwards,
+// failures and refill attempts. Our policy is the enabled one with the highest fee, which is
 // what LND senders plan with. The peer's is its enabled one with the lowest
 // fee: a refill can name the channel it comes back through, so the cheapest
 // is what one costs at least. Data quality is the worst of the channels',
@@ -113,12 +113,28 @@ func combine(chs []contracts.ChannelObservation) contracts.ChannelObservation {
 			f.BalanceFailures += o.Failures.BalanceFailures
 			f.BalanceFailuresMsat += o.Failures.BalanceFailuresMsat
 		}
+		if o.Refills != nil {
+			if c.Refills == nil {
+				c.Refills = &contracts.Refills{}
+			}
+			r := c.Refills
+			r.WindowHours = max(r.WindowHours, o.Refills.WindowHours)
+			r.Attempts = append(r.Attempts, o.Refills.Attempts...)
+			r.Omitted += o.Refills.Omitted
+		}
 		if c.Competition == nil {
 			c.Competition = o.Competition
 		}
 		c.DataQuality.Level = contracts.Worse(c.DataQuality.Level, o.DataQuality.Level)
 		for _, issue := range o.DataQuality.Issues {
 			c.DataQuality.Issues = append(c.DataQuality.Issues, o.ChanID.SCID()+": "+issue)
+		}
+	}
+	if r := c.Refills; r != nil {
+		// Newest first, as each channel's are, and no more than one keeps.
+		sort.SliceStable(r.Attempts, func(i, j int) bool { return r.Attempts[i].At.After(r.Attempts[j].At) })
+		if n := len(r.Attempts); n > contracts.MaxRefillAttempts {
+			r.Attempts, r.Omitted = r.Attempts[:contracts.MaxRefillAttempts], r.Omitted+n-contracts.MaxRefillAttempts
 		}
 	}
 	c.OurPolicy, c.PeerPolicy = pick(ours, true), pick(theirs, false)

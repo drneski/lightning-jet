@@ -3,6 +3,7 @@ package peer
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
 )
@@ -47,6 +48,9 @@ func TestCombineAddsUpAndPicksEachSidesPolicy(t *testing.T) {
 	a.Failures = &contracts.Failures{WindowHours: 720, CoverageHours: 300, BalanceFailures: 4, BalanceFailuresMsat: 800_000_000}
 	b.Failures = &contracts.Failures{WindowHours: 720, CoverageHours: 300, BalanceFailures: 1, BalanceFailuresMsat: 100_000_000}
 	b.PeerPolicy.FeePPM = 900
+	day := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	a.Refills = &contracts.Refills{WindowHours: 720, Attempts: []contracts.RefillAttempt{{At: day, Result: contracts.AttemptSucceeded}}}
+	b.Refills = &contracts.Refills{WindowHours: 720, Omitted: 2, Attempts: []contracts.RefillAttempt{{At: day.Add(time.Hour), Result: contracts.AttemptNoLiquidity}}}
 	b.Active = false
 	b.DataQuality.Add(contracts.DataDegraded, "channel inactive")
 	c := New(b, a).Combined
@@ -64,6 +68,9 @@ func TestCombineAddsUpAndPicksEachSidesPolicy(t *testing.T) {
 	// cheapest way back in.
 	if c.OurPolicy.FeePPM != 1000 || c.PeerPolicy.FeePPM != 50 {
 		t.Errorf("policies = %+v, %+v", c.OurPolicy, c.PeerPolicy)
+	}
+	if r := c.Refills; r == nil || len(r.Attempts) != 2 || r.Attempts[0].Result != contracts.AttemptNoLiquidity || r.Omitted != 2 {
+		t.Errorf("refills = %+v, want both channels', newest first", r)
 	}
 	if c.OurPolicy == a.OurPolicy {
 		t.Error("the combined policy is the channel's own, not a copy")
