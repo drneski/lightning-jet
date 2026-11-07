@@ -231,7 +231,14 @@ type Target struct {
 
 // IntentParameters holds one action's parameters.
 type IntentParameters struct {
-	Fee *FeeParameters `json:"fee,omitempty"`
+	Fee       *FeeParameters       `json:"fee,omitempty"`
+	Rebalance *RebalanceParameters `json:"rebalance,omitempty"`
+}
+
+// RebalanceParameters is how much a refill moves: out through the source
+// channel, and back to us through the target.
+type RebalanceParameters struct {
+	AmountMsat MilliSat `json:"amount_msat"`
 }
 
 // FeeParameters is a new policy and the observed one it replaces.
@@ -243,7 +250,7 @@ type FeeParameters struct {
 }
 
 // IntentLimits are the bounds execution must stay inside. A fee update has
-// none beyond its parameters.
+// none beyond its parameters; a rebalance may pay at most MaxFeeMsat.
 type IntentLimits struct {
 	MaxFeeMsat *MilliSat `json:"max_fee_msat,omitempty"`
 }
@@ -400,6 +407,11 @@ func (i *Intent) Validate() error {
 		if f := i.Parameters.Fee; f != nil {
 			req(&errs, f.FeePPM >= 0 && f.BaseMsat >= 0, "intent: fee parameters must not be negative")
 		}
+	case ActionRebalance:
+		r, src := i.Parameters.Rebalance, i.Target.SourceChanID
+		req(&errs, r != nil && r.AmountMsat > 0, "intent: rebalance needs a positive amount")
+		req(&errs, src != nil && *src != i.Target.ChanID, "intent: rebalance needs a source channel other than its target")
+		req(&errs, i.Limits.MaxFeeMsat != nil && *i.Limits.MaxFeeMsat >= 0, "intent: rebalance needs a maximum fee")
 	default:
 		errs = append(errs, fmt.Errorf("intent: unsupported action %q", i.Action))
 	}

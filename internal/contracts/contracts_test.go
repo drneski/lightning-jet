@@ -138,6 +138,31 @@ func validIntent() Intent {
 		SnapshotID: "s1", Mode: ModeShadow, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)}
 }
 
+func TestRebalanceIntentValidate(t *testing.T) {
+	src, max := ChanID(2), MilliSat(500_000)
+	i := validIntent()
+	i.Action, i.Target.SourceChanID, i.Limits.MaxFeeMsat = ActionRebalance, &src, &max
+	i.Parameters = IntentParameters{Rebalance: &RebalanceParameters{AmountMsat: 1_000_000_000}}
+	if err := i.Validate(); err != nil {
+		t.Fatalf("valid rebalance: %v", err)
+	}
+	for name, change := range map[string]func(i *Intent){
+		"no amount":     func(i *Intent) { i.Parameters.Rebalance.AmountMsat = 0 },
+		"no source":     func(i *Intent) { i.Target.SourceChanID = nil },
+		"to itself":     func(i *Intent) { same := i.Target.ChanID; i.Target.SourceChanID = &same },
+		"no fee limit":  func(i *Intent) { i.Limits.MaxFeeMsat = nil },
+		"no parameters": func(i *Intent) { i.Parameters.Rebalance = nil },
+	} {
+		c := i
+		r := *i.Parameters.Rebalance
+		c.Parameters.Rebalance = &r
+		change(&c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: a rebalance validated", name)
+		}
+	}
+}
+
 func TestIntentValidate(t *testing.T) {
 	i := validIntent()
 	if err := i.Validate(); err != nil {

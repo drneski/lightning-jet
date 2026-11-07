@@ -154,8 +154,8 @@ A proposed action, specific enough to authorize, execute and audit.
 | `id`, `schema` | `jet.intent/1` |
 | `action` | `fee_update` or `rebalance` (more later) |
 | `target` | The channel acted on; for `rebalance`, also the source channel |
-| `parameters` | Per action. `fee_update` has `fee`: `base_msat` and `fee_ppm`, with the `observed_base_msat` and `observed_fee_ppm` they replace. `rebalance` will have the amount to move. |
-| `limits` | The bounds execution must stay inside. `rebalance`: maximum fee (`max_fee_msat`) and time limit. `fee_update`: none beyond the parameters. |
+| `parameters` | Per action. `fee_update` has `fee`: `base_msat` and `fee_ppm`, with the `observed_base_msat` and `observed_fee_ppm` they replace. `rebalance` has `rebalance`: the `amount_msat` to move, out through the source channel and back through the target. |
+| `limits` | The bounds execution must stay inside. `rebalance`: maximum fee (`max_fee_msat`), and later a time limit, which the payment execution specification will define. `fee_update`: none beyond the parameters. |
 | `rationale` | The estimate ids it rests on, and a one-line summary generated from them |
 | `strategy` | Name and version |
 | `snapshot_id` | The inputs used |
