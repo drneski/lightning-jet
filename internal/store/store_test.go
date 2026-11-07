@@ -303,3 +303,31 @@ func TestRefillsAreKeptApartFromFees(t *testing.T) {
 		t.Errorf("a refill counted as a fee change: %v", fees)
 	}
 }
+
+// A channel's refill evaluation is read by cycle: the intent or abstention,
+// with its decision.
+func TestRefillEvaluation(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	if err := s.SaveCycle(ctx, withRefill(t, sampleCycle(t, "1", t0, contracts.ModeShadow), t0, contracts.ModeShadow)); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := s.RefillEvaluation(ctx, 2, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Intent == nil || ev.Intent.Action != contracts.ActionRebalance || ev.Decision == nil || ev.Decision.Verdict != contracts.Approved ||
+		ev.Snapshot.ID != "s1" || len(ev.Estimates) != 1 {
+		t.Errorf("channel 2's refill: %+v", ev)
+	}
+	ev, err = s.RefillEvaluation(ctx, 1, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Abstention == nil || ev.Abstention.Action != contracts.ActionRebalance || ev.Intent != nil {
+		t.Errorf("channel 1's refill: %+v", ev)
+	}
+	if _, err := s.RefillEvaluation(ctx, 1, "elsewhen"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another cycle: err = %v, want ErrNotFound", err)
+	}
+}

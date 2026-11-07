@@ -377,6 +377,35 @@ func (s *Store) LatestEvaluation(ctx context.Context, chanID contracts.ChanID) (
 	if err != nil {
 		return nil, err
 	}
+	return s.evaluation(ctx, kind, record)
+}
+
+// RefillEvaluation returns the refill intent or abstention for a channel in a
+// cycle, with its snapshot, estimates, decision and outcomes, or ErrNotFound
+// when the cycle didn't evaluate a refill of the channel.
+func (s *Store) RefillEvaluation(ctx context.Context, chanID contracts.ChanID, snapshotID string) (*Evaluation, error) {
+	var kind, record string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT kind, record FROM (
+			SELECT 'intent' AS kind, record, created_at, id FROM intents
+			WHERE chan_id = ? AND snapshot_id = ? AND action = 'rebalance'
+			UNION ALL
+			SELECT 'abstention' AS kind, record, created_at, id FROM abstentions
+			WHERE chan_id = ? AND snapshot_id = ? AND json_extract(record, '$.action') = 'rebalance'
+		) ORDER BY created_at DESC, id DESC LIMIT 1`, chanID.String(), snapshotID, chanID.String(), snapshotID).Scan(&kind, &record)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.evaluation(ctx, kind, record)
+}
+
+// evaluation reads an intent or abstention record, by kind, with what it rests
+// on and, for an intent, its decision and outcomes.
+func (s *Store) evaluation(ctx context.Context, kind, record string) (*Evaluation, error) {
+	var err error
 	ev := &Evaluation{}
 	var snapshotID string
 	var estimateIDs []string
