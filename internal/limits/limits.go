@@ -110,7 +110,7 @@ func (a *Authorizer) authorizeFee(ctx context.Context, intent *contracts.Intent)
 	rule("mode", a.FeesMode != contracts.ModeOff && intent.Mode == a.FeesMode,
 		"the fees engine is %s; the intent was proposed in %s", a.FeesMode, intent.Mode)
 	rule("expiry", now.Before(intent.ExpiresAt), "the intent expires at %s", intent.ExpiresAt.Format(time.RFC3339))
-	rule("freeze", !slices.Contains(a.Freeze, ch), "channel %s is %s", ch, map[bool]string{true: "frozen", false: "not frozen"}[slices.Contains(a.Freeze, ch)])
+	rule("freeze", a.frozen(intent.Target.Channels()) == nil, "%s", a.freezeDetail(intent.Target.Channels()))
 	rule("fee_ppm_bounds", fee.FeePPM >= a.FeePPMMin && fee.FeePPM <= a.FeePPMMax,
 		"%d ppm against bounds of %d-%d ppm", fee.FeePPM, a.FeePPMMin, a.FeePPMMax)
 	allowed := max(1, fee.ObservedFeePPM*a.MaxStepPct/100)
@@ -153,8 +153,8 @@ func (a *Authorizer) authorizeRefill(ctx context.Context, intent *contracts.Inte
 	rule("mode", a.RebalanceMode != contracts.ModeOff && intent.Mode == a.RebalanceMode,
 		"the rebalance engine is %s; the intent was proposed in %s", a.RebalanceMode, intent.Mode)
 	rule("expiry", now.Before(intent.ExpiresAt), "the intent expires at %s", intent.ExpiresAt.Format(time.RFC3339))
-	frozen := slices.Contains(a.Freeze, target) || slices.Contains(a.Freeze, source)
-	rule("freeze", !frozen, "channels %s and %s are %s", target, source, map[bool]string{true: "not both unfrozen", false: "not frozen"}[frozen])
+	both := append(slices.Clone(intent.Target.Channels()), source)
+	rule("freeze", a.frozen(both) == nil, "%s", a.freezeDetail(both))
 	var ppm int64
 	if amount > 0 {
 		ppm = int64(maxFee) * 1_000_000 / int64(amount)
@@ -182,6 +182,36 @@ func (a *Authorizer) authorizeRefill(ctx context.Context, intent *contracts.Inte
 		rule("rebalance_cooldown", true, "no refill of this channel approved in the last %d hours", a.RebalanceCooldownHours)
 	}
 	return a.decide(intent, now, rules)
+}
+
+// frozen returns the channels on the freeze list among chs. An intent acts on
+// all of a peer's channels together, so freezing any one of them freezes it.
+func (a *Authorizer) frozen(chs []contracts.ChanID) []contracts.ChanID {
+	var out []contracts.ChanID
+	for _, c := range chs {
+		if slices.Contains(a.Freeze, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (a *Authorizer) freezeDetail(chs []contracts.ChanID) string {
+	names := func(ids []contracts.ChanID) string {
+		s := make([]string, len(ids))
+		for i, id := range ids {
+			s[i] = id.String()
+		}
+		return strings.Join(s, ", ")
+	}
+	f := a.frozen(chs)
+	switch {
+	case len(f) > 0:
+		return "frozen: " + names(f)
+	case len(chs) == 1:
+		return "channel " + names(chs) + " is not frozen"
+	}
+	return "channels " + names(chs) + " are not frozen"
 }
 
 // decide turns the rule results into a decision: approved if every rule

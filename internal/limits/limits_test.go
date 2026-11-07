@@ -185,8 +185,14 @@ func TestRefillRules(t *testing.T) {
 		"in the cooldown": {history: refills{refill(7, 100_000, 10, now.Add(-11*time.Hour))}, intent: refill(7, 1_000_000, 500, now),
 			want: "rebalance_cooldown"},
 		"frozen source": {intent: refill(7, 1_000_000, 500, now), config: func(c *Config) { c.Freeze = []contracts.ChanID{9} }, want: "freeze"},
-		"engine off":    {intent: refill(7, 1_000_000, 500, now), config: func(c *Config) { c.RebalanceMode = contracts.ModeOff }, want: "mode"},
-		"expired":       {intent: refill(7, 1_000_000, 500, now.Add(-2*time.Hour)), want: "expiry"},
+		"frozen sibling": {intent: func() *contracts.Intent {
+			i := refill(7, 1_000_000, 500, now)
+			i.Target.ChanIDs = []contracts.ChanID{7, 8}
+			return i
+		}(),
+			config: func(c *Config) { c.Freeze = []contracts.ChanID{8} }, want: "freeze"},
+		"engine off": {intent: refill(7, 1_000_000, 500, now), config: func(c *Config) { c.RebalanceMode = contracts.ModeOff }, want: "mode"},
+		"expired":    {intent: refill(7, 1_000_000, 500, now.Add(-2*time.Hour)), want: "expiry"},
 	} {
 		b := *a
 		b.History = tc.history
@@ -204,5 +210,25 @@ func TestRefillRules(t *testing.T) {
 	b.History = refills{refill(7, 1_000_000, 900, now.Add(-25*time.Hour))}
 	if d := authorize(t, &b, refill(7, 1_000_000, 500, now)); d.Verdict != contracts.Approved {
 		t.Errorf("after a day: failed %v", failedRules(d))
+	}
+}
+
+// Freezing any of a peer's channels freezes the fee of all of them.
+func TestFreezingOneOfAPeersChannelsFreezesItsFee(t *testing.T) {
+	a := authorizer(history{})
+	a.Freeze = []contracts.ChanID{8}
+	i := intent(1000, 1100)
+	if d := authorize(t, a, i); d.Verdict != contracts.Approved {
+		t.Fatalf("a channel of another peer was frozen: %v", failedRules(d))
+	}
+	i.Target.ChanIDs = []contracts.ChanID{7, 8}
+	d := authorize(t, a, i)
+	if failed := failedRules(d); len(failed) != 1 || failed[0] != "freeze" {
+		t.Fatalf("failed %v", failed)
+	}
+	for _, r := range d.Rules {
+		if r.Rule == "freeze" && r.Detail != "frozen: 8" {
+			t.Errorf("detail %q", r.Detail)
+		}
 	}
 }
