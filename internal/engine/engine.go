@@ -70,7 +70,8 @@ func (e *Engine) Cycle(ctx context.Context) (Summary, error) {
 	cycle := store.Cycle{Snapshot: snap}
 	for _, ch := range snap.Channels {
 		est := e.Estimator.OutboundRevenue(snap, ch)
-		cycle.Estimates = append(cycle.Estimates, est)
+		refill := e.Estimator.ReplacementCost(snap, ch)
+		cycle.Estimates = append(cycle.Estimates, est, refill)
 		intent, abst := e.Strategy.Evaluate(snap, ch, est)
 		if abst != nil {
 			cycle.Abstentions = append(cycle.Abstentions, abst)

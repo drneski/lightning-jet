@@ -109,6 +109,19 @@ func TestCycleRecordsAnIntentOrAnAbstentionForEveryChannel(t *testing.T) {
 	if err := busy.Snapshot.Validate(); err != nil {
 		t.Errorf("snapshot read back: %v", err)
 	}
+	// Each channel is estimated twice: what it earns, and what refilling it
+	// costs.
+	estimates, err := st.Estimates(ctx, sum.SnapshotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int{}
+	for _, est := range estimates {
+		kinds[est.Kind]++
+	}
+	if len(estimates) != 2*sum.Channels || kinds[economics.KindOutboundRevenue] != sum.Channels || kinds[economics.KindReplacementCost] != sum.Channels {
+		t.Errorf("estimates by kind = %v for %d channels", kinds, sum.Channels)
+	}
 
 	for ch, want := range map[contracts.ChanID]contracts.AbstentionReason{balanced: contracts.NoProfitableAction, fullQuiet: contracts.InsufficientEvidence} {
 		ev, err := st.LatestEvaluation(ctx, ch)
