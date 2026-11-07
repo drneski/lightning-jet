@@ -1,7 +1,8 @@
 // Package observe assembles a snapshot of the node from LND: its channels,
 // both sides' fee policies, recent forwards, the forwards that failed for lack
-// of balance as Jet recorded them, and what competing channels advertise, with
-// data quality noted for each channel. It records what it read; the only
+// of balance as Jet recorded them, the refills attempted into each channel as
+// LND's payment history records them, and what competing channels advertise,
+// with data quality noted for each channel. It records what it read; the only
 // arithmetic is totals and percentiles of those readings.
 package observe
 
@@ -91,6 +92,14 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 			read("jet.htlc_stream")
 		}
 	}
+	pays, payErr := callLND(ctx, o.CallTimeout, func(c context.Context) ([]lnd.Payment, error) {
+		return o.LND.Payments(c, start)
+	})
+	if payErr == nil {
+		read("lnd.listpayments")
+	}
+	refills := refillAttempts(pays, info.IdentityPubkey, start, now)
+
 	gossipRead := false
 	ours := map[string]bool{}
 	for _, ch := range channels {
@@ -151,6 +160,17 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 				WindowHours: int64(o.Window / time.Hour), CoverageHours: int64(coverage / time.Hour),
 				BalanceFailures: f.Count, BalanceFailuresMsat: f.AmountMsat,
 			}
+		}
+
+		if payErr != nil {
+			// Without it the replacement cost falls back to its prior.
+			dq.Add(contracts.DataGood, "refill history unavailable: "+payErr.Error())
+		} else {
+			r := &contracts.Refills{WindowHours: int64(o.Window / time.Hour), Attempts: refills[ch.ChanID]}
+			if n := len(r.Attempts); n > contracts.MaxRefillAttempts {
+				r.Attempts, r.Omitted = r.Attempts[:contracts.MaxRefillAttempts], n-contracts.MaxRefillAttempts
+			}
+			obs.Refills = r
 		}
 
 		if o.GossipEvery > 0 {
@@ -258,6 +278,47 @@ func policy(p *lnd.RoutingPolicy) *contracts.Policy {
 		MinHTLCMsat: contracts.MilliSat(p.MinHTLCMsat), MaxHTLCMsat: contracts.MilliSat(p.MaxHTLCMsat),
 		Disabled: p.Disabled, LastUpdate: contracts.Timestamp(p.LastUpdate),
 	}
+}
+
+// refillAttempts picks the refills out of our payments: the attempts whose
+// route ends at us, by the channel they came back through, newest first. An
+// attempt still in flight hasn't ended, and is left out.
+func refillAttempts(pays []lnd.Payment, us string, start, end time.Time) map[contracts.ChanID][]contracts.RefillAttempt {
+	out := map[contracts.ChanID][]contracts.RefillAttempt{}
+	for _, p := range pays {
+		for _, a := range p.Attempts {
+			n := len(a.Hops)
+			at := a.At
+			if at.IsZero() {
+				at = p.CreatedAt
+			}
+			if a.Status == "IN_FLIGHT" || n < 2 || a.Hops[n-1].PubKey != us || at.Before(start) || !at.Before(end) {
+				continue
+			}
+			r := contracts.RefillAttempt{At: contracts.Timestamp(at), SourceChanID: a.Hops[0].ChanID,
+				AmountMsat: contracts.MilliSat(a.TotalAmtMsat - a.TotalFeesMsat), FeeMsat: contracts.MilliSat(a.TotalFeesMsat), Hops: n}
+			idx := a.FailureSourceIndex
+			switch {
+			case a.Status == "SUCCEEDED":
+				r.Result = contracts.AttemptSucceeded
+			case idx == n && (a.FailureCode == "INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS" || a.FailureCode == "MPP_TIMEOUT"):
+				r.Result = contracts.AttemptReached
+			case idx >= 1 && idx < n && a.FailureCode == "TEMPORARY_CHANNEL_FAILURE":
+				r.Result, r.FailedAt = contracts.AttemptNoLiquidity, idx
+			default:
+				r.Result = contracts.AttemptFailed
+				if idx >= 1 {
+					r.FailedAt = idx
+				}
+			}
+			last := a.Hops[n-1].ChanID
+			out[last] = append(out[last], r)
+		}
+	}
+	for _, rs := range out {
+		sort.SliceStable(rs, func(i, j int) bool { return rs[i].At.After(rs[j].At) })
+	}
+	return out
 }
 
 // summarize totals forwards out of and into each channel, and by the pair of

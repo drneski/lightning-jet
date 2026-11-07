@@ -99,6 +99,8 @@ func fakeLND(t *testing.T) (address, cert, macaroon string) {
 			hold()
 		case strings.HasPrefix(r.URL.Path, "/v1/graph/node/"):
 			fmt.Fprint(w, `{"channels":[]}`)
+		case r.URL.Path == "/v1/payments":
+			fmt.Fprint(w, `{"payments":[],"last_index_offset":"0"}`)
 		case r.URL.Path == "/v1/getinfo":
 			fmt.Fprintf(w, `{"identity_pubkey":%q,"block_height":900000,"synced_to_chain":true,"synced_to_graph":true}`, us)
 		case r.URL.Path == "/v1/channels":

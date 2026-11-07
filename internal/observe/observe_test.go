@@ -283,3 +283,72 @@ func hasSource(s *contracts.Snapshot, name string) bool {
 	}
 	return false
 }
+
+// Refills are the attempts whose route came back to us, by the channel they
+// came back through, newest first, each with how it ended.
+func TestRefillAttemptsFromPayments(t *testing.T) {
+	f := fakeNode()
+	route := func(back contracts.ChanID, end string) []lnd.Hop {
+		return []lnd.Hop{{ChanID: 2, PubKey: peer}, {ChanID: 77, PubKey: "03cc"}, {ChanID: back, PubKey: end}}
+	}
+	attempt := func(age time.Duration, status, code string, idx int, back contracts.ChanID, end string) lnd.Attempt {
+		return lnd.Attempt{At: now.Add(-age), Status: status, TotalAmtMsat: 1_001_000_000, TotalFeesMsat: 1_000_000,
+			Hops: route(back, end), FailureCode: code, FailureSourceIndex: idx}
+	}
+	f.SentPayments = []lnd.Payment{
+		{CreatedAt: now.Add(-3 * time.Hour), Status: "SUCCEEDED", Attempts: []lnd.Attempt{
+			attempt(3*time.Hour, "FAILED", "TEMPORARY_CHANNEL_FAILURE", 2, 1, us),
+			attempt(2*time.Hour, "SUCCEEDED", "", 0, 1, us),
+		}},
+		{CreatedAt: now.Add(-time.Hour), Status: "FAILED", Attempts: []lnd.Attempt{
+			attempt(time.Hour, "FAILED", "INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS", 3, 1, us),
+			attempt(time.Hour, "FAILED", "TEMPORARY_CHANNEL_FAILURE", 0, 1, us), // our own channel
+			attempt(time.Hour, "IN_FLIGHT", "", 0, 1, us),
+		}},
+		// A payment to someone else is no refill.
+		{CreatedAt: now.Add(-time.Hour), Status: "SUCCEEDED", Attempts: []lnd.Attempt{attempt(time.Hour, "SUCCEEDED", "", 0, 88, "03dd")}},
+	}
+	snap, err := observer(f).Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := snap.Channel(1)
+	r := c1.Refills
+	if r == nil || r.WindowHours != 720 || len(r.Attempts) != 4 {
+		t.Fatalf("refills = %+v", r)
+	}
+	var results []contracts.AttemptResult
+	for _, a := range r.Attempts {
+		results = append(results, a.Result)
+	}
+	want := []contracts.AttemptResult{contracts.AttemptReached, contracts.AttemptFailed, contracts.AttemptSucceeded, contracts.AttemptNoLiquidity}
+	if !slices.Equal(results, want) {
+		t.Errorf("results = %v, want %v", results, want)
+	}
+	if a := r.Attempts[3]; a.SourceChanID != 2 || a.AmountMsat != 1_000_000_000 || a.FeeMsat != 1_000_000 || a.PPM() != 1000 ||
+		a.Hops != 3 || a.FailedAt != 2 {
+		t.Errorf("no-liquidity attempt = %+v", a)
+	}
+	if c2, _ := snap.Channel(2); c2.Refills == nil || len(c2.Refills.Attempts) != 0 {
+		t.Errorf("channel 2 refills = %+v", c2.Refills)
+	}
+	if !slices.ContainsFunc(snap.Sources, func(s contracts.Source) bool { return s.Name == "lnd.listpayments" }) {
+		t.Errorf("sources = %+v", snap.Sources)
+	}
+}
+
+// Without the payment history, the snapshot says so and has no refills; the
+// observations themselves are no less good.
+func TestUnreadablePaymentsAreANote(t *testing.T) {
+	f := fakeNode()
+	f.Errors = map[string]error{"Payments": errors.New("permission denied")}
+	snap, err := observer(f).Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1, _ := snap.Channel(1)
+	if c1.Refills != nil || c1.DataQuality.Level != contracts.DataGood ||
+		!slices.ContainsFunc(c1.DataQuality.Issues, func(s string) bool { return strings.HasPrefix(s, "refill history unavailable") }) {
+		t.Errorf("channel 1 = refills %+v, data quality %+v", c1.Refills, c1.DataQuality)
+	}
+}
