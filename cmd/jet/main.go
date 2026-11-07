@@ -200,6 +200,8 @@ func cmdRun(ctx context.Context, args []string, stderr io.Writer) error {
 	lim.FeesMode = cfg.FeesMode
 	strat := fee.DefaultConfig
 	strat.Revisit = cfg.Interval
+	// The strategy proposes no step the limits would refuse.
+	strat.StepPct, strat.CatchUpStepPct = min(strat.StepPct, lim.MaxStepPct), min(strat.CatchUpStepPct, lim.MaxStepPct)
 	e := &engine.Engine{
 		Observer: &observe.Observer{LND: client, Now: now, NewID: gen.ID, Window: time.Duration(cfg.WindowDays) * 24 * time.Hour,
 			CallTimeout: 30 * time.Second, Failures: st, GossipEvery: time.Duration(cfg.GossipRefreshHours) * time.Hour},
