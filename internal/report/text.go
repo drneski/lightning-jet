@@ -49,15 +49,24 @@ func (r *Report) Text() string {
 		b.WriteString("\n")
 		table(&b, chans, t.HorizonHours/24)
 	}
+	byID := map[contracts.ChanID]Channel{}
+	for _, c := range chans {
+		byID[c.ChanID] = c
+	}
+	if len(r.Routes) > 0 {
+		b.WriteString("\nTop routes\n")
+		routesTable(&b, r.Routes, byID, t.OutFeeMsat)
+	}
 
-	if notes := worthALook(chans, t, days); len(notes) > 0 {
+	if notes := worthALook(chans, r.Routes, byID, t, days); len(notes) > 0 {
 		b.WriteString("\nWorth a look\n")
 		for _, n := range notes {
 			b.WriteString(wrap("- "+n, "  ", 80))
 		}
 	}
 
-	b.WriteString("\n" + wrap(fmt.Sprintf("Out fee is what we charge to forward out through the channel. Others is the "+
+	b.WriteString("\n" + wrap(fmt.Sprintf("Routed out / in is the sats forwarded out through the channel and in through it. "+
+		"Out fee is what we charge to forward out through the channel. Others is the "+
 		"median out fee of the other channels into the same peer: a prior, not a price. Both are in ppm. Earned and "+
 		"Missed cover the %d days, and Next %dd is the forecast. Amounts are in sats.", days, t.HorizonHours/24), "", 80))
 	b.WriteString(wrap("Shadow mode: Jet changed nothing. A change it approves isn't applied, so it proposes the "+
@@ -87,11 +96,9 @@ func byEarnings(in []Channel) []Channel {
 const nameWidth = 18
 
 func table(b *strings.Builder, chans []Channel, horizonDays int64) {
-	cols := []struct {
-		head  string
-		right bool
-	}{{"Peer", false}, {"Channel", false}, {"Our side", false}, {"Out fee", true}, {"Others", true},
-		{"Earned", true}, {"Missed", true}, {fmt.Sprintf("Next %dd", horizonDays), true}, {"Jet", false}}
+	heads := []string{"Peer", "Channel", "Our side", "Routed out / in", "Out fee", "Others", "Earned", "Missed",
+		fmt.Sprintf("Next %dd", horizonDays), "Jet"}
+	right := []bool{false, false, false, true, true, true, true, true, true, false}
 	rows := [][]string{}
 	for _, c := range chans {
 		fee, others, missed, next := "-", "-", "-", "-"
@@ -109,11 +116,28 @@ func table(b *strings.Builder, chans []Channel, horizonDays int64) {
 		}
 		p := pct(c.LocalMsat, c.CapacityMsat)
 		rows = append(rows, []string{truncate(name(c), nameWidth), c.SCID, fmt.Sprintf("%s %3d%%", bar(p), p),
+			sats(c.Forwards.OutAmountMsat) + " / " + sats(c.Forwards.InAmountMsat),
 			fee, others, sats(c.Forwards.OutFeeMsat), missed, next, decision(c)})
 	}
-	widths := make([]int, len(cols))
-	for i, c := range cols {
-		widths[i] = width(c.head)
+	columns(b, heads, right, rows)
+}
+
+// routesTable lists the routes that earned the most, at most three.
+func routesTable(b *strings.Builder, routes []Route, byID map[contracts.ChanID]Channel, totalFees contracts.MilliSat) {
+	rows := [][]string{}
+	for _, r := range routes[:min(3, len(routes))] {
+		rows = append(rows, []string{routeName(r, byID), strconv.Itoa(r.Count), sats(r.AmountOutMsat), sats(r.FeeMsat),
+			fmt.Sprintf("%d%%", pct(r.FeeMsat, totalFees))})
+	}
+	columns(b, []string{"In → out", "Forwards", "Routed", "Earned", "Share"}, []bool{false, true, true, true, true}, rows)
+}
+
+// columns writes a table: each column as wide as its widest cell, numeric
+// columns aligned right.
+func columns(b *strings.Builder, heads []string, right []bool, rows [][]string) {
+	widths := make([]int, len(heads))
+	for i, h := range heads {
+		widths[i] = width(h)
 		for _, r := range rows {
 			widths[i] = max(widths[i], width(r[i]))
 		}
@@ -121,12 +145,12 @@ func table(b *strings.Builder, chans []Channel, horizonDays int64) {
 	write := func(cells []string) {
 		var line strings.Builder
 		for i, cell := range cells {
-			if i == len(cells)-1 {
-				line.WriteString(cell) // the last column isn't padded
+			pad := strings.Repeat(" ", widths[i]-width(cell))
+			if i == len(cells)-1 && !right[i] {
+				line.WriteString(cell) // a last column aligned left needs no padding
 				break
 			}
-			pad := strings.Repeat(" ", widths[i]-width(cell))
-			if cols[i].right {
+			if right[i] {
 				line.WriteString(pad + cell)
 			} else {
 				line.WriteString(cell + pad)
@@ -135,14 +159,22 @@ func table(b *strings.Builder, chans []Channel, horizonDays int64) {
 		}
 		b.WriteString(strings.TrimRight(line.String(), " ") + "\n")
 	}
-	heads := make([]string, len(cols))
-	for i, c := range cols {
-		heads[i] = c.head
-	}
 	write(heads)
 	for _, r := range rows {
 		write(r)
 	}
+}
+
+// routeName names a route by its two peers. A channel that has since closed
+// is named by its short id.
+func routeName(r Route, byID map[contracts.ChanID]Channel) string {
+	end := func(id contracts.ChanID) string {
+		if c, ok := byID[id]; ok {
+			return truncate(name(c), nameWidth)
+		}
+		return id.SCID()
+	}
+	return end(r.In) + " → " + end(r.Out)
 }
 
 // bar draws the share of the channel's capacity on our side, in tenths.
@@ -241,7 +273,7 @@ func heldBy(rules []string) string {
 
 // worthALook picks out facts in the report that call for attention. Each is
 // stated as observed, without a recommendation.
-func worthALook(chans []Channel, t Totals, days int64) []string {
+func worthALook(chans []Channel, routes []Route, byID map[contracts.ChanID]Channel, t Totals, days int64) []string {
 	var notes []string
 	for _, c := range chans {
 		p := pct(c.LocalMsat, c.CapacityMsat)
@@ -257,6 +289,25 @@ func worthALook(chans []Channel, t Totals, days int64) []string {
 			}
 		}
 		notes = append(notes, n)
+	}
+
+	// A channel that brings in much of what the node earns, with little left
+	// on its peer's side to bring in more: a tenth of its capacity or less,
+	// and under a tenth of what came in through it over the window, so a
+	// large channel with months of inflow left isn't flagged.
+	sourceShare := map[contracts.ChanID]contracts.MilliSat{}
+	for _, r := range routes {
+		sourceShare[r.In] += r.FeeMsat
+	}
+	for _, c := range chans {
+		fees := sourceShare[c.ChanID]
+		if t.OutFeeMsat <= 0 || fees*10 < t.OutFeeMsat {
+			continue
+		}
+		if p := pct(c.RemoteMsat, c.CapacityMsat); p <= 10 && c.RemoteMsat*10 < c.Forwards.InAmountMsat {
+			notes = append(notes, fmt.Sprintf("%s brings in the forwards behind %d%% of the fees, but has only %s sats on its side (%d%%), so little more can come in through it.",
+				name(c), pct(fees, t.OutFeeMsat), sats(c.RemoteMsat), p))
+		}
 	}
 
 	var idle []string

@@ -6,6 +6,7 @@
 package report
 
 import (
+	"sort"
 	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
@@ -20,6 +21,21 @@ type Report struct {
 	WindowHours int64     `json:"window_hours"`
 	Totals      Totals    `json:"totals"`
 	Channels    []Channel `json:"channels"`
+	// Routes are the forwards by the pair of channels they came in and left
+	// through, the ones that earned the most first.
+	Routes []Route `json:"routes,omitempty"`
+}
+
+// Route is the forwards that came in through one channel and left through
+// another.
+type Route struct {
+	In            contracts.ChanID   `json:"chan_id_in"`
+	InSCID        string             `json:"scid_in"`
+	Out           contracts.ChanID   `json:"chan_id_out"`
+	OutSCID       string             `json:"scid_out"`
+	Count         int                `json:"count"`
+	AmountOutMsat contracts.MilliSat `json:"amount_out_msat"`
+	FeeMsat       contracts.MilliSat `json:"fee_msat"`
 }
 
 // Channel is one channel's economics.
@@ -33,6 +49,7 @@ type Channel struct {
 	Active       bool               `json:"active"`
 	CapacityMsat contracts.MilliSat `json:"capacity_msat"`
 	LocalMsat    contracts.MilliSat `json:"local_msat"`
+	RemoteMsat   contracts.MilliSat `json:"remote_msat"`
 	// FeePPM is our outbound fee rate: what we charge to forward out through
 	// the channel.
 	FeePPM   *int64             `json:"out_fee_ppm,omitempty"`
@@ -112,7 +129,7 @@ func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *st
 	for _, c := range snap.Channels {
 		res := results[c.ChanID]
 		ch := Channel{ChanID: c.ChanID, SCID: c.ChanID.SCID(), Peer: c.Peer, PeerAlias: c.PeerAlias, Active: c.Active,
-			CapacityMsat: c.CapacityMsat, LocalMsat: c.LocalMsat, Forwards: c.Forwards,
+			CapacityMsat: c.CapacityMsat, LocalMsat: c.LocalMsat, RemoteMsat: c.RemoteMsat, Forwards: c.Forwards,
 			YieldPct: yield(c.Forwards.OutFeeMsat, c.CapacityMsat, c.Forwards.WindowHours),
 			Failures: c.Failures, Competition: c.Competition, Forecast: forecasts[c.ChanID],
 			Result: res.Result(), Abstained: res.Abstained, Proposal: res.Proposal, Verdict: res.Verdict, Blocked: res.Blocked,
@@ -144,6 +161,18 @@ func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *st
 		}
 	}
 	t.YieldPct = yield(t.OutFeeMsat, t.CapacityMsat, r.WindowHours)
+
+	for _, rt := range snap.Routes {
+		r.Routes = append(r.Routes, Route{In: rt.In, InSCID: rt.In.SCID(), Out: rt.Out, OutSCID: rt.Out.SCID(),
+			Count: rt.Count, AmountOutMsat: rt.AmountOutMsat, FeeMsat: rt.FeeMsat})
+	}
+	sort.SliceStable(r.Routes, func(i, j int) bool {
+		a, b := r.Routes[i], r.Routes[j]
+		if a.FeeMsat != b.FeeMsat {
+			return a.FeeMsat > b.FeeMsat
+		}
+		return a.Count > b.Count
+	})
 	return r
 }
 

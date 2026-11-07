@@ -9,7 +9,7 @@ import (
 
 // rawColumns are Raw's columns. Amounts are in msat, as Jet records them.
 var rawColumns = []string{
-	"chan_id", "scid", "peer", "peer_alias", "active", "capacity_msat", "local_msat", "out_fee_ppm",
+	"chan_id", "scid", "peer", "peer_alias", "active", "capacity_msat", "local_msat", "remote_msat", "out_fee_ppm",
 	"out_forwards", "out_msat", "out_fee_msat", "in_forwards", "in_msat", "window_hours", "yield_pct_per_year",
 	"failed_forwards", "failed_msat", "coverage_hours",
 	"expected_msat", "low_msat", "high_msat", "interval", "horizon_hours", "confidence",
@@ -27,7 +27,7 @@ func (r *Report) Raw() string {
 		f, row := c.Forwards, make([]string, 0, len(rawColumns))
 		add := func(v ...string) { row = append(row, v...) }
 		add(c.ChanID.String(), c.SCID, c.Peer, clean(c.PeerAlias), strconv.FormatBool(c.Active),
-			msat(c.CapacityMsat), msat(c.LocalMsat), optInt(c.FeePPM),
+			msat(c.CapacityMsat), msat(c.LocalMsat), msat(c.RemoteMsat), optInt(c.FeePPM),
 			strconv.Itoa(f.OutCount), msat(f.OutAmountMsat), msat(f.OutFeeMsat), strconv.Itoa(f.InCount), msat(f.InAmountMsat),
 			strconv.FormatInt(f.WindowHours, 10), strconv.FormatFloat(c.YieldPct, 'f', 4, 64))
 		if fl := c.Failures; fl != nil {
