@@ -24,10 +24,14 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/strategy/refill"
 )
 
-const (
-	us   = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	peer = "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-)
+// Our node, and a peer for each channel.
+const us = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+var peers = map[contracts.ChanID]string{
+	fullBusy:  "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	balanced:  "03cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	fullQuiet: "03dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+}
 
 // Synthetic channels, all funded long before the forwards window.
 const (
@@ -47,14 +51,14 @@ func fakeNode(now time.Time) *lndtest.Fake {
 	f := &lndtest.Fake{
 		Info: lnd.Info{IdentityPubkey: us, BlockHeight: 900000, SyncedToChain: true, SyncedToGraph: true},
 		Channels: []lnd.Channel{
-			{ChanID: fullBusy, RemotePubkey: peer, Active: true, CapacitySat: 5_000_000, LocalSat: 4_600_000, RemoteSat: 390_000},
-			{ChanID: balanced, RemotePubkey: peer, Active: true, CapacitySat: 2_000_000, LocalSat: 1_000_000, RemoteSat: 990_000},
-			{ChanID: fullQuiet, RemotePubkey: peer, Active: true, CapacitySat: 5_000_000, LocalSat: 4_500_000, RemoteSat: 490_000},
+			{ChanID: fullBusy, RemotePubkey: peers[fullBusy], Active: true, CapacitySat: 5_000_000, LocalSat: 4_600_000, RemoteSat: 390_000},
+			{ChanID: balanced, RemotePubkey: peers[balanced], Active: true, CapacitySat: 2_000_000, LocalSat: 1_000_000, RemoteSat: 990_000},
+			{ChanID: fullQuiet, RemotePubkey: peers[fullQuiet], Active: true, CapacitySat: 5_000_000, LocalSat: 4_500_000, RemoteSat: 490_000},
 		},
 		Edges: map[contracts.ChanID]lnd.Edge{},
 	}
 	for _, ch := range f.Channels {
-		f.Edges[ch.ChanID] = lnd.Edge{ChanID: ch.ChanID, Node1Pub: us, Node2Pub: peer, Node1Policy: policy(500), Node2Policy: policy(400)}
+		f.Edges[ch.ChanID] = lnd.Edge{ChanID: ch.ChanID, Node1Pub: us, Node2Pub: ch.RemotePubkey, Node1Policy: policy(500), Node2Policy: policy(400)}
 	}
 	add := func(ch contracts.ChanID, n int) {
 		for i := 0; i < n; i++ {

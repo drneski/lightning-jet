@@ -18,6 +18,7 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/health"
 	"github.com/drneski/lightning-jet/v2/internal/limits"
 	"github.com/drneski/lightning-jet/v2/internal/observe"
+	"github.com/drneski/lightning-jet/v2/internal/peer"
 	"github.com/drneski/lightning-jet/v2/internal/store"
 	"github.com/drneski/lightning-jet/v2/internal/strategy/fee"
 	"github.com/drneski/lightning-jet/v2/internal/strategy/refill"
@@ -111,7 +112,7 @@ func (e *Engine) Cycle(ctx context.Context) (Summary, error) {
 		if e.Strategy == nil {
 			continue
 		}
-		intent, abst := e.Strategy.Evaluate(snap, ch, est, rc)
+		intent, abst := e.Strategy.Evaluate(snap, peer.New(ch), est, rc)
 		if abst != nil {
 			cycle.Abstentions = append(cycle.Abstentions, abst)
 			sum.Abstentions++

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
+	"github.com/drneski/lightning-jet/v2/internal/peer"
 )
 
 var now = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
@@ -36,7 +37,7 @@ func estimate(level contracts.ConfidenceLevel) *contracts.Estimate {
 var snap = &contracts.Snapshot{ID: "s1"}
 
 func TestInsideTheBandIsNoProfitableAction(t *testing.T) {
-	intent, abst := strategy().Evaluate(snap, channel(54, 500), estimate(contracts.ConfidenceHigh), nil)
+	intent, abst := strategy().Evaluate(snap, peer.New(channel(54, 500)), estimate(contracts.ConfidenceHigh), nil)
 	if intent != nil || abst == nil || abst.Reason != contracts.NoProfitableAction || abst.Action != contracts.ActionFeeUpdate {
 		t.Fatalf("got intent %v, abstention %+v", intent, abst)
 	}
@@ -46,7 +47,7 @@ func TestInsideTheBandIsNoProfitableAction(t *testing.T) {
 }
 
 func TestOutsideTheBandWithoutEvidenceAbstains(t *testing.T) {
-	_, abst := strategy().Evaluate(snap, channel(90, 500), estimate(contracts.ConfidenceLow), nil)
+	_, abst := strategy().Evaluate(snap, peer.New(channel(90, 500)), estimate(contracts.ConfidenceLow), nil)
 	if abst == nil || abst.Reason != contracts.InsufficientEvidence {
 		t.Fatalf("got %+v", abst)
 	}
@@ -61,14 +62,14 @@ func TestOutsideTheBandWithoutEvidenceAbstains(t *testing.T) {
 func TestUntrustedInputsAreInsufficientData(t *testing.T) {
 	ch := channel(90, 500)
 	ch.DataQuality = contracts.DataQuality{Level: contracts.DataInsufficient, Issues: []string{"forwarding history unavailable: timeout"}}
-	_, abst := strategy().Evaluate(snap, ch, estimate(contracts.ConfidenceNone), nil)
+	_, abst := strategy().Evaluate(snap, peer.New(ch), estimate(contracts.ConfidenceNone), nil)
 	if abst == nil || abst.Reason != contracts.InsufficientData || !strings.Contains(abst.Detail, "forwarding history unavailable") {
 		t.Fatalf("got %+v", abst)
 	}
 }
 
 func TestFullChannelProposesALowerFee(t *testing.T) {
-	intent, abst := strategy().Evaluate(snap, channel(92, 500), estimate(contracts.ConfidenceMedium), nil)
+	intent, abst := strategy().Evaluate(snap, peer.New(channel(92, 500)), estimate(contracts.ConfidenceMedium), nil)
 	if abst != nil {
 		t.Fatalf("abstained: %+v", abst)
 	}
@@ -88,21 +89,21 @@ func TestFullChannelProposesALowerFee(t *testing.T) {
 }
 
 func TestDrainedChannelProposesAHigherFee(t *testing.T) {
-	intent, _ := strategy().Evaluate(snap, channel(10, 500), estimate(contracts.ConfidenceHigh), nil)
+	intent, _ := strategy().Evaluate(snap, peer.New(channel(10, 500)), estimate(contracts.ConfidenceHigh), nil)
 	if intent == nil || intent.Parameters.Fee.FeePPM != 550 {
 		t.Fatalf("got %+v", intent)
 	}
 }
 
 func TestStepIsAtLeastOnePPM(t *testing.T) {
-	intent, _ := strategy().Evaluate(snap, channel(92, 5), estimate(contracts.ConfidenceMedium), nil)
+	intent, _ := strategy().Evaluate(snap, peer.New(channel(92, 5)), estimate(contracts.ConfidenceMedium), nil)
 	if intent == nil || intent.Parameters.Fee.FeePPM != 4 {
 		t.Fatalf("got %+v", intent)
 	}
 }
 
 func TestNothingBelowZero(t *testing.T) {
-	_, abst := strategy().Evaluate(snap, channel(92, 0), estimate(contracts.ConfidenceMedium), nil)
+	_, abst := strategy().Evaluate(snap, peer.New(channel(92, 0)), estimate(contracts.ConfidenceMedium), nil)
 	if abst == nil || abst.Reason != contracts.NoProfitableAction || !strings.Contains(abst.Detail, "already 0 ppm") {
 		t.Fatalf("got %+v", abst)
 	}
@@ -117,7 +118,7 @@ func refill(low int64) *contracts.Estimate {
 // A depleted channel priced below the least a refill costs is raised by the
 // catch-up step; one priced above it by the usual step.
 func TestBelowTheRefillCostCatchesUp(t *testing.T) {
-	intent, _ := strategy().Evaluate(snap, channel(2, 300), estimate(contracts.ConfidenceMedium), refill(600))
+	intent, _ := strategy().Evaluate(snap, peer.New(channel(2, 300)), estimate(contracts.ConfidenceMedium), refill(600))
 	if intent == nil || intent.Parameters.Fee.FeePPM != 345 {
 		t.Fatalf("got %+v", intent)
 	}
@@ -132,13 +133,53 @@ func TestBelowTheRefillCostCatchesUp(t *testing.T) {
 		t.Errorf("intent does not validate: %v", err)
 	}
 
-	intent, _ = strategy().Evaluate(snap, channel(2, 800), estimate(contracts.ConfidenceMedium), refill(600))
+	intent, _ = strategy().Evaluate(snap, peer.New(channel(2, 800)), estimate(contracts.ConfidenceMedium), refill(600))
 	if intent == nil || intent.Parameters.Fee.FeePPM != 880 {
 		t.Errorf("above the refill cost: got %+v", intent)
 	}
 	// A full channel isn't raised, whatever a refill costs.
-	intent, _ = strategy().Evaluate(snap, channel(92, 400), estimate(contracts.ConfidenceMedium), refill(600))
+	intent, _ = strategy().Evaluate(snap, peer.New(channel(92, 400)), estimate(contracts.ConfidenceMedium), refill(600))
 	if intent == nil || intent.Parameters.Fee.FeePPM != 360 {
 		t.Errorf("full channel: got %+v", intent)
+	}
+}
+
+// A peer's channels get one decision, on their combined balance, and the
+// proposal lists them all.
+func TestAPeersChannelsAreDecidedTogether(t *testing.T) {
+	a, b := channel(10, 500), channel(10, 500)
+	b.ChanID = 2
+	b.LocalMsat = 4_000_000_000 // 40% between them: inside the band
+	_, abst := strategy().Evaluate(snap, peer.New(a, b), estimate(contracts.ConfidenceHigh), nil)
+	if abst == nil || !strings.Contains(abst.Detail, "local balance 45% is inside") || len(abst.ChanIDs) != 2 {
+		t.Fatalf("got %+v", abst)
+	}
+	b.LocalMsat = 500_000_000
+	intent, _ := strategy().Evaluate(snap, peer.New(a, b), estimate(contracts.ConfidenceHigh), nil)
+	if intent == nil || intent.Parameters.Fee.FeePPM != 550 || len(intent.Target.ChanIDs) != 2 ||
+		!strings.Contains(intent.Rationale.Summary, "applies to all 2 of the peer's channels") {
+		t.Fatalf("got %+v", intent)
+	}
+	if err := intent.Validate(); err != nil {
+		t.Errorf("intent does not validate: %v", err)
+	}
+}
+
+// Channels to one peer that charge different fees are set to the highest,
+// whatever their balance or evidence.
+func TestDifferentFeesAreAligned(t *testing.T) {
+	a, b := channel(54, 1000), channel(54, 900)
+	b.ChanID = 2
+	intent, abst := strategy().Evaluate(snap, peer.New(a, b), estimate(contracts.ConfidenceNone), nil)
+	if intent == nil {
+		t.Fatalf("abstained: %+v", abst)
+	}
+	f := intent.Parameters.Fee
+	if f.FeePPM != 1000 || f.ObservedFeePPM != 1000 || !strings.HasPrefix(intent.Rationale.Summary, "Align: ") ||
+		!strings.Contains(intent.Rationale.Summary, "0x0x2 at 900 ppm") {
+		t.Errorf("intent = %+v, %q", f, intent.Rationale.Summary)
+	}
+	if err := intent.Validate(); err != nil {
+		t.Errorf("intent does not validate: %v", err)
 	}
 }

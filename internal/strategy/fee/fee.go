@@ -4,6 +4,11 @@
 // channel priced below what any refill costs is raised by a larger step,
 // toward that cost. It proposes and never decides: authorization does that.
 //
+// It decides per peer: a peer's channels get one fee, evaluated on the
+// channels as one (see package peer). Channels to one peer that charge
+// different fees are first set to the highest of them, the fee LND senders
+// already plan with.
+//
 // The design's conditional floor, which keeps the fee of a channel Jet means
 // to refill at its replacement cost plus a margin, waits for the rebalancing
 // engine: until it exists, Jet means to refill no channel.
@@ -16,12 +21,13 @@ import (
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
 	"github.com/drneski/lightning-jet/v2/internal/economics"
+	"github.com/drneski/lightning-jet/v2/internal/peer"
 )
 
 // The strategy's identity, recorded on everything it proposes.
 const (
 	StrategyName    = "fee.balance-band"
-	StrategyVersion = "0.2.0"
+	StrategyVersion = "0.3.0"
 )
 
 // Config is the strategy's settings.
@@ -62,21 +68,35 @@ type Strategy struct {
 
 var component = contracts.Component{Name: StrategyName, Version: StrategyVersion}
 
-// Evaluate returns exactly one of an intent or an abstention for the channel,
-// from its observation, its outbound revenue estimate, and its replacement
-// cost estimate, which may be nil.
-func (s *Strategy) Evaluate(snap *contracts.Snapshot, ch contracts.ChannelObservation, est, refill *contracts.Estimate) (*contracts.Intent, *contracts.Abstention) {
+// Evaluate returns exactly one of an intent or an abstention for a peer's
+// channels, from their observation as one, their outbound revenue estimate,
+// and their replacement cost estimate, which may be nil.
+func (s *Strategy) Evaluate(snap *contracts.Snapshot, g peer.Group, est, refill *contracts.Estimate) (*contracts.Intent, *contracts.Abstention) {
 	now := contracts.Timestamp(s.Now())
+	ch := g.Combined
 	ids := []string{est.ID}
 	if refill != nil {
 		ids = append(ids, refill.ID)
 	}
 	abstain := func(reason contracts.AbstentionReason, detail string, wouldChangeIf ...string) (*contracts.Intent, *contracts.Abstention) {
 		return nil, &contracts.Abstention{
-			ID: s.NewID(), Schema: contracts.SchemaAbstention, ChanID: ch.ChanID, Strategy: component, Action: contracts.ActionFeeUpdate,
-			SnapshotID: snap.ID, EstimateIDs: ids, Reason: reason, Detail: detail,
+			ID: s.NewID(), Schema: contracts.SchemaAbstention, ChanID: ch.ChanID, ChanIDs: g.IDs(), Strategy: component,
+			Action: contracts.ActionFeeUpdate, SnapshotID: snap.ID, EstimateIDs: ids, Reason: reason, Detail: detail,
 			WouldChangeIf: wouldChangeIf, RevisitAt: now.Add(s.Revisit), CreatedAt: now,
 		}
+	}
+	propose := func(newPPM int64, summary string) (*contracts.Intent, *contracts.Abstention) {
+		return &contracts.Intent{
+			ID: s.NewID(), Schema: contracts.SchemaIntent, Action: contracts.ActionFeeUpdate,
+			Target: contracts.Target{ChanID: ch.ChanID, ChanIDs: g.IDs()},
+			Parameters: contracts.IntentParameters{Fee: &contracts.FeeParameters{
+				BaseMsat: ch.OurPolicy.BaseMsat, FeePPM: newPPM,
+				ObservedBaseMsat: ch.OurPolicy.BaseMsat, ObservedFeePPM: ch.OurPolicy.FeePPM,
+			}},
+			Rationale:  contracts.Rationale{EstimateIDs: ids, Summary: summary},
+			Strategy:   component,
+			SnapshotID: snap.ID, Mode: s.Mode, CreatedAt: now, ExpiresAt: now.Add(s.IntentTTL),
+		}, nil
 	}
 
 	if ch.DataQuality.Level == contracts.DataInsufficient || ch.OurPolicy == nil || ch.CapacityMsat <= 0 {
@@ -86,6 +106,16 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, ch contracts.ChannelObserv
 		}
 		return abstain(contracts.InsufficientData, "the inputs can't be trusted: "+issues,
 			"the missing or failed inputs become available")
+	}
+
+	if g.FeesDiffer() {
+		var each []string
+		for _, c := range g.Channels {
+			each = append(each, fmt.Sprintf("%s at %d ppm and %d msat base", c.ChanID.SCID(), c.OurPolicy.FeePPM, c.OurPolicy.BaseMsat))
+		}
+		return propose(ch.OurPolicy.FeePPM, fmt.Sprintf("Align: the peer's channels charge different fees (%s). LND senders plan with the highest, "+
+			"and a payment that pays a lower one can't use the others' balance, so set all of them to %d ppm and %d msat base.",
+			strings.Join(each, ", "), ch.OurPolicy.FeePPM, ch.OurPolicy.BaseMsat))
 	}
 
 	pct := int64(ch.LocalMsat) * 100 / int64(ch.CapacityMsat)
@@ -130,16 +160,8 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, ch contracts.ChannelObserv
 	if refill != nil && refill.ExpectedPPM != nil {
 		summary += fmt.Sprintf(" Refill: %d ppm expected (%d to %d, %s).", *refill.ExpectedPPM, *refill.LowPPM, *refill.HighPPM, refill.Interval)
 	}
-
-	return &contracts.Intent{
-		ID: s.NewID(), Schema: contracts.SchemaIntent, Action: contracts.ActionFeeUpdate,
-		Target: contracts.Target{ChanID: ch.ChanID},
-		Parameters: contracts.IntentParameters{Fee: &contracts.FeeParameters{
-			BaseMsat: ch.OurPolicy.BaseMsat, FeePPM: newPPM,
-			ObservedBaseMsat: ch.OurPolicy.BaseMsat, ObservedFeePPM: ppm,
-		}},
-		Rationale:  contracts.Rationale{EstimateIDs: ids, Summary: summary},
-		Strategy:   component,
-		SnapshotID: snap.ID, Mode: s.Mode, CreatedAt: now, ExpiresAt: now.Add(s.IntentTTL),
-	}, nil
+	if len(g.Channels) > 1 {
+		summary += fmt.Sprintf(" The fee applies to all %d of the peer's channels.", len(g.Channels))
+	}
+	return propose(newPPM, summary)
 }
