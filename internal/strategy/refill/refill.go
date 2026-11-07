@@ -24,7 +24,7 @@ import (
 // The strategy's identity, recorded on everything it proposes.
 const (
 	StrategyName    = "refill.value"
-	StrategyVersion = "0.3.0"
+	StrategyVersion = "0.4.0"
 )
 
 // Config is the strategy's settings.
@@ -200,8 +200,16 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, target Channel, all []Chan
 	if source.Revenue != nil {
 		ids = append(ids, source.Revenue.ID)
 	}
+	// Priced by what refills into it have cost when there are any; otherwise
+	// by the expected cost through the neighbor, and the high end from
+	// anywhere else.
 	costPPM, how := *rc.HighPPM, "the high end of its replacement cost, with no cheap way in from that source"
-	if viaNeighbor {
+	switch {
+	case rc.Interval == economics.IntervalMeasured:
+		costPPM, how = *rc.ExpectedPPM, "the median of the refills into it"
+	case viaNeighbor && rc.Interval == economics.IntervalAttempts:
+		costPPM, how = *rc.ExpectedPPM, "its expected replacement cost, from refill attempts"
+	case viaNeighbor:
 		costPPM, how = *rc.ExpectedPPM, "its expected replacement cost, through the cheapest way in"
 	}
 

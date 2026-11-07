@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
+	"github.com/drneski/lightning-jet/v2/internal/economics"
 )
 
 var now = time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
@@ -206,5 +207,19 @@ func TestAPeersChannelsAreRefilledAsOne(t *testing.T) {
 	}
 	if err := intent.Validate(); err != nil {
 		t.Errorf("intent does not validate: %v", err)
+	}
+}
+
+// Measured refills price a refill from any source at their median.
+func TestMeasuredRefillsPriceEverySource(t *testing.T) {
+	target, all := node(1000, 1_000_000, 1_400_000)
+	all[1].Obs.LocalMsat = 2_000_000_000 // the neighbor has nothing to spare
+	target.Refill.Interval, target.Refill.ExpectedPPM = economics.IntervalMeasured, ip(600)
+	intent, abst := strategy().Evaluate(snap, target, all)
+	if intent == nil {
+		t.Fatalf("abstained: %+v", abst)
+	}
+	if !strings.Contains(intent.Rationale.Summary, "from 0x0x3 would cost about 840 sats (600 ppm, the median of the refills into it)") {
+		t.Errorf("summary = %q", intent.Rationale.Summary)
 	}
 }
