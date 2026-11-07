@@ -173,6 +173,7 @@ A recorded decision to do nothing, with the reason.
 |---|---|
 | `id`, `schema` | `jet.abstention/1` |
 | `chan_id` | The channel |
+| `action` | What the strategy declined to propose: `fee_update` or `rebalance`. Records from before refills have none, and are all fee updates. |
 | `strategy` | Name and version |
 | `snapshot_id`, `estimate_ids` | What it saw |
 | `reason` | `no_profitable_action`, `insufficient_evidence` or `insufficient_data` |

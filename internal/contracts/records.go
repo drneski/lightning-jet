@@ -270,12 +270,15 @@ const (
 	InsufficientData     AbstentionReason = "insufficient_data"
 )
 
-// Abstention is a recorded decision to do nothing, with the reason.
+// Abstention is a recorded decision to do nothing, with the reason. Action is
+// what the strategy declined to propose; records from before refills have
+// none, and are all fee updates.
 type Abstention struct {
 	ID            string           `json:"id"`
 	Schema        string           `json:"schema"`
 	ChanID        ChanID           `json:"chan_id"`
 	Strategy      Component        `json:"strategy"`
+	Action        Action           `json:"action,omitempty"`
 	SnapshotID    string           `json:"snapshot_id"`
 	EstimateIDs   []string         `json:"estimate_ids"`
 	Reason        AbstentionReason `json:"reason"`
@@ -425,6 +428,8 @@ func (a *Abstention) Validate() error {
 	req(&errs, a.Schema == SchemaAbstention, "abstention: schema must be "+SchemaAbstention)
 	req(&errs, a.SnapshotID != "", "abstention: missing snapshot id")
 	req(&errs, a.Strategy.Name != "" && a.Strategy.Version != "", "abstention: missing strategy name or version")
+	req(&errs, a.Action == "" || a.Action == ActionFeeUpdate || a.Action == ActionRebalance,
+		fmt.Sprintf("abstention: unknown action %q", a.Action))
 	switch a.Reason {
 	case NoProfitableAction, InsufficientEvidence, InsufficientData:
 	default:

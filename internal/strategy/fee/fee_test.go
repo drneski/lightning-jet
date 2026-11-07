@@ -37,7 +37,7 @@ var snap = &contracts.Snapshot{ID: "s1"}
 
 func TestInsideTheBandIsNoProfitableAction(t *testing.T) {
 	intent, abst := strategy().Evaluate(snap, channel(54, 500), estimate(contracts.ConfidenceHigh), nil)
-	if intent != nil || abst == nil || abst.Reason != contracts.NoProfitableAction {
+	if intent != nil || abst == nil || abst.Reason != contracts.NoProfitableAction || abst.Action != contracts.ActionFeeUpdate {
 		t.Fatalf("got intent %v, abstention %+v", intent, abst)
 	}
 	if err := abst.Validate(); err != nil {

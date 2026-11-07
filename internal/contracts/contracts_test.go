@@ -138,6 +138,18 @@ func validIntent() Intent {
 		SnapshotID: "s1", Mode: ModeShadow, CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)}
 }
 
+func TestAbstentionAction(t *testing.T) {
+	a := Abstention{ID: "a1", Schema: SchemaAbstention, Strategy: Component{"refill.value", "0.1.0"}, SnapshotID: "s1",
+		Reason: NoProfitableAction, Detail: "costs more than it earns", WouldChangeIf: []string{"the fee rises"},
+		RevisitAt: t0.Add(time.Hour), CreatedAt: t0}
+	for action, ok := range map[Action]bool{"": true, ActionFeeUpdate: true, ActionRebalance: true, "close_channel": false} {
+		a.Action = action
+		if err := a.Validate(); (err == nil) != ok {
+			t.Errorf("action %q: err = %v", action, err)
+		}
+	}
+}
+
 func TestRebalanceIntentValidate(t *testing.T) {
 	src, max := ChanID(2), MilliSat(500_000)
 	i := validIntent()

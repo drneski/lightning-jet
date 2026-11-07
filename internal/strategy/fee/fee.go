@@ -73,7 +73,7 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, ch contracts.ChannelObserv
 	}
 	abstain := func(reason contracts.AbstentionReason, detail string, wouldChangeIf ...string) (*contracts.Intent, *contracts.Abstention) {
 		return nil, &contracts.Abstention{
-			ID: s.NewID(), Schema: contracts.SchemaAbstention, ChanID: ch.ChanID, Strategy: component,
+			ID: s.NewID(), Schema: contracts.SchemaAbstention, ChanID: ch.ChanID, Strategy: component, Action: contracts.ActionFeeUpdate,
 			SnapshotID: snap.ID, EstimateIDs: ids, Reason: reason, Detail: detail,
 			WouldChangeIf: wouldChangeIf, RevisitAt: now.Add(s.Revisit), CreatedAt: now,
 		}
