@@ -56,8 +56,8 @@ Then:
 - `jet explain <channel id>` explains a channel's latest decision;
 - `jet report` shows each channel's economics, by peer name: the sats routed
   out and in, fees earned and their yield on capacity, forwards that failed for
-  lack of balance, the forecast, what competing channels charge, and the latest
-  decision. Then the routes through the node that earned the most, and the
+  lack of balance, the forecast, what competing channels charge, what a refill
+  would cost, and the latest decision. Then the routes through the node that earned the most, and the
   channels whose depleted side limits them.
   `--raw` prints every exact value as tab-separated rows, and `--json` the
   whole report;
