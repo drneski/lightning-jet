@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ func fakeNode() *lndtest.Fake {
 		Forwards: []lnd.Forward{
 			{Time: now.Add(-time.Hour), ChanIDIn: 2, ChanIDOut: 1, AmtInMsat: 100_500_000, AmtOutMsat: 100_000_000, FeeMsat: 50_000},
 			{Time: now.Add(-48 * time.Hour), ChanIDIn: 2, ChanIDOut: 1, AmtInMsat: 200_100_000, AmtOutMsat: 200_000_000, FeeMsat: 100_000},
+			{Time: now.Add(-2 * time.Hour), ChanIDIn: 1, ChanIDOut: 2, AmtInMsat: 10_010_000, AmtOutMsat: 10_000_000, FeeMsat: 10_000},
 			{Time: now.Add(-40 * 24 * time.Hour), ChanIDIn: 2, ChanIDOut: 1, AmtInMsat: 1, AmtOutMsat: 1, FeeMsat: 1}, // outside the window
 		},
 	}
@@ -88,6 +90,16 @@ func TestSnapshot(t *testing.T) {
 	if c2.DataQuality.Level != contracts.DataDegraded || !hasIssue(c2.DataQuality, "inactive") || !hasIssue(c2.DataQuality, "gossiped") {
 		t.Errorf("channel 2 data quality = %+v", c2.DataQuality)
 	}
+
+	// Forwards by the pair of channels they came in and left through, in
+	// channel id order.
+	want := []contracts.Route{
+		{In: 1, Out: 2, Count: 1, AmountOutMsat: 10_000_000, FeeMsat: 10_000},
+		{In: 2, Out: 1, Count: 2, AmountOutMsat: 300_000_000, FeeMsat: 150_000},
+	}
+	if !slices.Equal(snap.Routes, want) {
+		t.Errorf("routes = %+v, want %+v", snap.Routes, want)
+	}
 }
 
 func TestMissingForwardsMakeDataInsufficient(t *testing.T) {
@@ -101,6 +113,9 @@ func TestMissingForwardsMakeDataInsufficient(t *testing.T) {
 		if c.DataQuality.Level != contracts.DataInsufficient || !hasIssue(c.DataQuality, "forwarding history unavailable") {
 			t.Errorf("channel %s data quality = %+v", c.ChanID, c.DataQuality)
 		}
+	}
+	if snap.Routes != nil {
+		t.Errorf("routes without a forwarding history = %+v", snap.Routes)
 	}
 }
 

@@ -77,7 +77,7 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 	if fwErr == nil {
 		read("lnd.forwardinghistory")
 	}
-	out, in := summarize(forwards)
+	out, in, routes := summarize(forwards)
 
 	var failures map[contracts.ChanID]store.BalanceFailures
 	var coverage time.Duration
@@ -96,6 +96,9 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 	snap := &contracts.Snapshot{
 		ID: o.NewID(), Schema: contracts.SchemaSnapshot, NodePubkey: info.IdentityPubkey,
 		BlockHeight: info.BlockHeight, TakenAt: now,
+	}
+	if fwErr == nil {
+		snap.Routes = routes
 	}
 	for _, ch := range channels {
 		obs := contracts.ChannelObservation{
@@ -246,9 +249,11 @@ func policy(p *lnd.RoutingPolicy) *contracts.Policy {
 	}
 }
 
-// summarize totals forwards out of and into each channel.
-func summarize(fws []lnd.Forward) (out, in map[contracts.ChanID]contracts.Forwards) {
+// summarize totals forwards out of and into each channel, and by the pair of
+// channels they came in and left through, ordered by channel ids.
+func summarize(fws []lnd.Forward) (out, in map[contracts.ChanID]contracts.Forwards, routes []contracts.Route) {
 	out, in = map[contracts.ChanID]contracts.Forwards{}, map[contracts.ChanID]contracts.Forwards{}
+	pairs := map[[2]contracts.ChanID]*contracts.Route{}
 	for _, fw := range fws {
 		o := out[fw.ChanIDOut]
 		o.OutCount++
@@ -259,6 +264,24 @@ func summarize(fws []lnd.Forward) (out, in map[contracts.ChanID]contracts.Forwar
 		i.InCount++
 		i.InAmountMsat += contracts.MilliSat(fw.AmtInMsat)
 		in[fw.ChanIDIn] = i
+		key := [2]contracts.ChanID{fw.ChanIDIn, fw.ChanIDOut}
+		r := pairs[key]
+		if r == nil {
+			r = &contracts.Route{In: fw.ChanIDIn, Out: fw.ChanIDOut}
+			pairs[key] = r
+		}
+		r.Count++
+		r.AmountOutMsat += contracts.MilliSat(fw.AmtOutMsat)
+		r.FeeMsat += contracts.MilliSat(fw.FeeMsat)
 	}
-	return out, in
+	for _, r := range pairs {
+		routes = append(routes, *r)
+	}
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].In != routes[j].In {
+			return routes[i].In < routes[j].In
+		}
+		return routes[i].Out < routes[j].Out
+	})
+	return out, in, routes
 }
