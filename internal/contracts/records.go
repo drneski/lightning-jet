@@ -22,14 +22,28 @@ const (
 // Snapshot is the inputs one evaluation saw, frozen so the decision can be
 // reconstructed. Everything in it is observed, not derived.
 type Snapshot struct {
-	ID            string               `json:"id"`
-	Schema        string               `json:"schema"`
-	NodePubkey    string               `json:"node_pubkey"`
-	BlockHeight   uint32               `json:"block_height"`
-	TakenAt       time.Time            `json:"taken_at"`
-	Sources       []Source             `json:"sources"`
-	Channels      []ChannelObservation `json:"channels"`
-	ContentSHA256 string               `json:"content_sha256"`
+	ID          string               `json:"id"`
+	Schema      string               `json:"schema"`
+	NodePubkey  string               `json:"node_pubkey"`
+	BlockHeight uint32               `json:"block_height"`
+	TakenAt     time.Time            `json:"taken_at"`
+	Sources     []Source             `json:"sources"`
+	Channels    []ChannelObservation `json:"channels"`
+	// Routes pair the channels forwards came in and left through, over the
+	// forwards window, ordered by channel ids. Absent when the forwarding
+	// history couldn't be read.
+	Routes        []Route `json:"routes,omitempty"`
+	ContentSHA256 string  `json:"content_sha256"`
+}
+
+// Route is the forwards that came in through one channel and left through
+// another: where flow enters the node and where it leaves.
+type Route struct {
+	In            ChanID   `json:"chan_id_in"`
+	Out           ChanID   `json:"chan_id_out"`
+	Count         int      `json:"count"`
+	AmountOutMsat MilliSat `json:"amount_out_msat"`
+	FeeMsat       MilliSat `json:"fee_msat"`
 }
 
 // Source is one input and when it was read.
