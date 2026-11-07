@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
+	"github.com/drneski/lightning-jet/v2/internal/peer"
 	"github.com/drneski/lightning-jet/v2/internal/store"
 )
 
@@ -17,7 +18,10 @@ import (
 // observed, estimated, proposed and decided, and what happens next. Its JSON
 // is the contract; the text form is presentation.
 type Explanation struct {
-	ChanID    contracts.ChanID      `json:"chan_id"`
+	ChanID contracts.ChanID `json:"chan_id"`
+	// ChanIDs are the peer's channels when it has several: Jet decided about
+	// them together, and Observed is them as one.
+	ChanIDs   []contracts.ChanID    `json:"chan_ids,omitempty"`
 	Observed  Observed              `json:"observed"`
 	Estimated []*contracts.Estimate `json:"estimated"`
 	Proposed  Proposed              `json:"proposed"`
@@ -51,6 +55,8 @@ type Observed struct {
 	Failures      *contracts.Failures    `json:"failures,omitempty"`
 	Competition   *contracts.Competition `json:"competition,omitempty"`
 	DataQuality   contracts.DataQuality  `json:"data_quality"`
+	// Channels are the peer's channels one by one, when it has several.
+	Channels []contracts.ChannelObservation `json:"channels,omitempty"`
 }
 
 // Proposed is the strategy's result: exactly one of an intent or an
@@ -74,23 +80,31 @@ type Next struct {
 	Note          string                 `json:"note"`
 }
 
-// Build assembles the explanation of an evaluation from its records.
+// Build assembles the explanation of an evaluation from its records. When the
+// evaluation covered a peer's channels together, it shows them as the
+// strategy saw them, combined the same way from the same snapshot.
 func Build(ev *store.Evaluation) (*Explanation, error) {
 	var chanID contracts.ChanID
+	var ids []contracts.ChanID
 	switch {
 	case ev.Intent != nil:
-		chanID = ev.Intent.Target.ChanID
+		chanID, ids = ev.Intent.Target.ChanID, ev.Intent.Target.ChanIDs
 	case ev.Abstention != nil:
-		chanID = ev.Abstention.ChanID
+		chanID, ids = ev.Abstention.ChanID, ev.Abstention.ChanIDs
 	default:
 		return nil, fmt.Errorf("explain: the evaluation has neither an intent nor an abstention")
 	}
-	ch, ok := ev.Snapshot.Channel(chanID)
-	if !ok {
-		return nil, fmt.Errorf("explain: snapshot %s has no channel %s", ev.Snapshot.ID, chanID)
+	var members []contracts.ChannelObservation
+	for _, id := range contracts.Group(chanID, ids) {
+		c, ok := ev.Snapshot.Channel(id)
+		if !ok {
+			return nil, fmt.Errorf("explain: snapshot %s has no channel %s", ev.Snapshot.ID, id)
+		}
+		members = append(members, c)
 	}
+	ch := peer.New(members...).Combined
 	x := &Explanation{
-		ChanID: chanID,
+		ChanID: chanID, ChanIDs: ids,
 		Observed: Observed{
 			SnapshotID: ev.Snapshot.ID, ContentSHA256: ev.Snapshot.ContentSHA256, At: ev.Snapshot.TakenAt,
 			Peer: ch.Peer, Active: ch.Active, CapacityMsat: ch.CapacityMsat, LocalMsat: ch.LocalMsat,
@@ -98,6 +112,9 @@ func Build(ev *store.Evaluation) (*Explanation, error) {
 			Failures: ch.Failures, Competition: ch.Competition, DataQuality: ch.DataQuality,
 		},
 		Estimated: ev.Estimates,
+	}
+	if len(members) > 1 {
+		x.Observed.Channels = members
 	}
 	x.Proposed, x.Decided, x.Next = parts(ev)
 	return x, nil
@@ -143,10 +160,27 @@ func (x *Explanation) Text() string {
 	more := func(format string, args ...any) { line("", format, args...) }
 	o := x.Observed
 
-	fmt.Fprintf(&b, "Channel %s with %s\n\n", x.ChanID, short(o.Peer))
+	if len(x.ChanIDs) > 1 {
+		ids := make([]string, len(x.ChanIDs))
+		for i, id := range x.ChanIDs {
+			ids[i] = id.String()
+		}
+		fmt.Fprintf(&b, "Channels %s with %s, decided together\n\n", strings.Join(ids, " and "), short(o.Peer))
+	} else {
+		fmt.Fprintf(&b, "Channel %s with %s\n\n", x.ChanID, short(o.Peer))
+	}
 	line("Observed", "%s. Local %s sats of %s (%d%%).%s", o.At.Format("2006-01-02 15:04 MST"),
 		commas(o.LocalMsat.Sats()), commas(o.CapacityMsat.Sats()), pct(o.LocalMsat, o.CapacityMsat), inactive(o.Active))
-	more("Our fee: %s. Peer's fee to us: %s.", policy(o.OurPolicy), policy(o.PeerPolicy))
+	if len(o.Channels) > 1 {
+		for _, c := range o.Channels {
+			more("%s: local %s sats of %s (%d%%), our fee %s.%s", c.ChanID.SCID(), commas(c.LocalMsat.Sats()),
+				commas(c.CapacityMsat.Sats()), pct(c.LocalMsat, c.CapacityMsat), policy(c.OurPolicy), inactive(c.Active))
+		}
+		more("Our fee: %s, the highest, which LND senders plan with. Peer's fee to us: %s, the lowest.",
+			policy(o.OurPolicy), policy(o.PeerPolicy))
+	} else {
+		more("Our fee: %s. Peer's fee to us: %s.", policy(o.OurPolicy), policy(o.PeerPolicy))
+	}
 	f := o.Forwards
 	more("%d days: %d forwards out, earning %s sats; %d in.", f.WindowHours/24, f.OutCount, commas(f.OutFeeMsat.Sats()), f.InCount)
 	if fl := o.Failures; fl != nil {

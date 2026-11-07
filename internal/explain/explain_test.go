@@ -12,14 +12,14 @@ import (
 
 var at = time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
 
-const peer = "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+const peerKey = "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func mp(m contracts.MilliSat) *contracts.MilliSat { return &m }
 
 func snapshot() *contracts.Snapshot {
 	s := &contracts.Snapshot{ID: "01a17581-b830-7c3b-98d2-e6a4b5c6d7e8", Schema: contracts.SchemaSnapshot, NodePubkey: "02aa", TakenAt: at,
 		Channels: []contracts.ChannelObservation{{
-			ChanID: 111111111111111111, Peer: peer, Active: true, CapacityMsat: 5_000_000_000, LocalMsat: 4_500_000_000,
+			ChanID: 111111111111111111, Peer: peerKey, Active: true, CapacityMsat: 5_000_000_000, LocalMsat: 4_500_000_000,
 			OurPolicy: &contracts.Policy{FeePPM: 500}, PeerPolicy: &contracts.Policy{FeePPM: 400},
 			Forwards:    contracts.Forwards{WindowHours: 720, OutCount: 3, OutFeeMsat: 150_000, InCount: 1},
 			DataQuality: contracts.DataQuality{Level: contracts.DataGood},
@@ -263,5 +263,40 @@ func TestAddRefillChecksItsCycleAndChannel(t *testing.T) {
 	}
 	if x.Refill != nil {
 		t.Errorf("refill = %+v", x.Refill)
+	}
+}
+
+// An evaluation of a peer's channels together shows them as one, each channel
+// under it, from the same snapshot.
+func TestAPeersChannelsAreExplainedTogether(t *testing.T) {
+	ev := abstentionEvaluation()
+	second := ev.Snapshot.Channels[0]
+	second.ChanID, second.LocalMsat = 222222222222222222, 500_000_000
+	second.OurPolicy, second.PeerPolicy = &contracts.Policy{FeePPM: 500}, &contracts.Policy{FeePPM: 900}
+	ev.Snapshot.Channels = append(ev.Snapshot.Channels, second)
+	ev.Snapshot.Seal()
+	ev.Abstention.ChanIDs = []contracts.ChanID{111111111111111111, 222222222222222222}
+	x, err := Build(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x.Observed.CapacityMsat != 10_000_000_000 || x.Observed.LocalMsat != 5_000_000_000 || len(x.Observed.Channels) != 2 ||
+		x.Observed.PeerPolicy.FeePPM != 400 {
+		t.Errorf("observed = %+v", x.Observed)
+	}
+	text := x.Text()
+	for _, want := range []string{
+		"Channels 111111111111111111 and 222222222222222222 with 03bbbbbbbbbbbbbb…, decided together",
+		"Local 5,000,000 sats of 10,000,000 (50%).",
+		"202109x15665344x58254: local 500,000 sats of 5,000,000 (10%), our fee base 0 msat, 500 ppm.",
+		"Our fee: base 0 msat, 500 ppm, the highest, which LND senders plan with. Peer's fee to us: base 0 msat, 400 ppm, the lowest.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lacks %q:\n%s", want, text)
+		}
+	}
+	ev.Abstention.ChanIDs[1] = 333
+	if _, err := Build(ev); err == nil {
+		t.Error("a channel missing from the snapshot was explained")
 	}
 }

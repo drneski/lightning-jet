@@ -256,7 +256,8 @@ Those are the fee decision. The refill decision from the same cycle follows
 under its own label: the refill proposed (amount, source, maximum fee, expiry)
 with its verdict and rules, or the abstention and what would make Jet refill.
 A channel that isn't depleted isn't evaluated for a refill, and the
-explanation says so.
+explanation says so. Asked about any of a peer's channels, it explains their
+decision together: the channels as one, then each channel under it.
 
 `jet explain --json` emits the same content as structured data, which is the
 stable contract. The text form is presentation and may change. An optional
