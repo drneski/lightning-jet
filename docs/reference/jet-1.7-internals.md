@@ -467,9 +467,12 @@ The detail behind each point is above. The design response is in the
   - the measured cost of every refill (`txn`, with channel ids), at msat
     precision in 2.0;
   - hop prices discovered while probing (`liquidity`).
-- **Change the unit.** Plan per channel and spend against each channel's own
+- **Change the unit.** Plan and spend in one unit, against that unit's own
   revenue. 1.7 classifies per channel, acts per peer, and lets the refill
-  budget exceed the channel's own fee.
+  budget exceed the channel's own fee. 2.0's unit is a peer's channels taken
+  together, which is one channel for most peers: LND forwards over whichever
+  of a peer's channels can carry a payment, so their flow splits between them
+  by chance.
 - **Close the loop.** Read back the cheapest failed route, and back off on
   timeouts too. Reservations should be durable, not in-memory.
 - **One process, real async, deadlines on every RPC, an explicit schema with

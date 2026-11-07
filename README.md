@@ -71,6 +71,11 @@ Then:
 - `jet health` checks that cycles and both streams are current, and exits 1 if
   they aren't.
 
+A peer's channels count as one. LND forwards over whichever of them can carry
+a payment, so Jet decides about them together: one fee for all of them, and
+refills judged on their combined balance. Status and the report show them as
+one row, under the oldest channel; `jet explain` takes any of them.
+
 ## Running under systemd
 
 [`contrib/systemd/jet.service`](contrib/systemd/jet.service) runs Jet as an

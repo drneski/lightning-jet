@@ -152,6 +152,13 @@ Fees and rebalancing share it.
   two-way (liquidity that comes back routes again), minus the cost of draining
   the source and an allowance for uncertainty. One component computes it, and
   fees, rebalancing and later channel allocation all use it.
+- **A peer's channels are one unit.** LND forwards a payment over any of a
+  peer's channels that can carry it and whose policy it satisfies, choosing at
+  random, and LND senders plan with the highest fee and time lock among them.
+  So a peer's forwards and failures split between its channels by chance, and
+  Jet estimates and decides per peer: one fee for all its channels, a refill
+  judged on their combined balance, never sourced from another of them, and a
+  freeze on any of them holding all. For most peers that is one channel.
 - **Low confidence means no action.** Where the evidence can't support an
   estimate, the engines hold and say why. Data quality and economic confidence
   are reported separately.
