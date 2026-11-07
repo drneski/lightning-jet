@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -356,15 +357,19 @@ type Evaluation struct {
 	Outcomes   []*contracts.Outcome
 }
 
-// LatestEvaluation returns the most recent intent or abstention for a channel,
-// with its snapshot, estimates, decision and outcomes.
+// feeAbstention selects the abstentions from fee updates. Records from before
+// refills have no action, and are all fee updates.
+const feeAbstention = `COALESCE(json_extract(record, '$.action'), 'fee_update') = 'fee_update'`
+
+// LatestEvaluation returns the most recent fee intent or abstention for a
+// channel, with its snapshot, estimates, decision and outcomes.
 func (s *Store) LatestEvaluation(ctx context.Context, chanID contracts.ChanID) (*Evaluation, error) {
 	var kind, record string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT kind, record FROM (
-			SELECT 'intent' AS kind, record, created_at, id FROM intents WHERE chan_id = ?
+			SELECT 'intent' AS kind, record, created_at, id FROM intents WHERE chan_id = ? AND action = 'fee_update'
 			UNION ALL
-			SELECT 'abstention' AS kind, record, created_at, id FROM abstentions WHERE chan_id = ?
+			SELECT 'abstention' AS kind, record, created_at, id FROM abstentions WHERE chan_id = ? AND `+feeAbstention+`
 		) ORDER BY created_at DESC, id DESC LIMIT 1`, chanID.String(), chanID.String()).Scan(&kind, &record)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -443,7 +448,8 @@ func getRecord[T any](ctx context.Context, db *sql.DB, query string, arg any) (*
 	return v, nil
 }
 
-// Status summarizes the most recent cycle.
+// Status summarizes the most recent cycle. Abstentions, Approved, Rejected
+// and PerChannel count fee decisions; Refills are the refill evaluations.
 type Status struct {
 	SnapshotID  string
 	TakenAt     time.Time
@@ -453,6 +459,17 @@ type Status struct {
 	Rejected    int
 	// PerChannel is each channel's result in that cycle, in channel order.
 	PerChannel []ChannelStatus
+	// Refills are the cycle's refill evaluations, in channel order.
+	Refills []RefillStatus
+}
+
+// RefillStatus is one refill evaluation: a proposal with its decision, or an
+// abstention.
+type RefillStatus struct {
+	ChanID     contracts.ChanID
+	Intent     *contracts.Intent
+	Decision   *contracts.Decision
+	Abstention *contracts.Abstention
 }
 
 // ChannelStatus is one channel's result in a cycle: an abstention's reason,
@@ -520,7 +537,7 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 		return nil, err
 	}
 	st := &Status{SnapshotID: snap.ID, TakenAt: snap.TakenAt, Channels: len(snap.Channels), Abstentions: map[contracts.AbstentionReason]int{}}
-	rows, err := s.db.QueryContext(ctx, `SELECT reason, COUNT(*) FROM abstentions WHERE snapshot_id = ? GROUP BY reason`, snap.ID)
+	rows, err := s.db.QueryContext(ctx, `SELECT reason, COUNT(*) FROM abstentions WHERE snapshot_id = ? AND `+feeAbstention+` GROUP BY reason`, snap.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +555,7 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 	}
 	err = s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(d.verdict = 'approved'), 0), COALESCE(SUM(d.verdict = 'rejected'), 0)
-		FROM decisions d JOIN intents i ON i.id = d.intent_id WHERE i.snapshot_id = ?`, snap.ID).Scan(&st.Approved, &st.Rejected)
+		FROM decisions d JOIN intents i ON i.id = d.intent_id WHERE i.snapshot_id = ? AND i.action = 'fee_update'`, snap.ID).Scan(&st.Approved, &st.Rejected)
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +566,7 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 		results[c.ChanID] = cs
 		st.PerChannel = append(st.PerChannel, *cs)
 	}
-	abst, err := s.db.QueryContext(ctx, `SELECT chan_id, reason FROM abstentions WHERE snapshot_id = ?`, snap.ID)
+	abst, err := s.db.QueryContext(ctx, `SELECT chan_id, reason FROM abstentions WHERE snapshot_id = ? AND `+feeAbstention, snap.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +584,8 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 		return nil, err
 	}
 	props, err := s.db.QueryContext(ctx, `
-		SELECT i.chan_id, i.record, d.record FROM intents i JOIN decisions d ON d.intent_id = i.id WHERE i.snapshot_id = ?`, snap.ID)
+		SELECT i.chan_id, i.record, d.record FROM intents i JOIN decisions d ON d.intent_id = i.id
+		WHERE i.snapshot_id = ? AND i.action = 'fee_update'`, snap.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -620,5 +638,76 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 	for i := range st.PerChannel {
 		st.PerChannel[i] = *results[st.PerChannel[i].ChanID]
 	}
+	if st.Refills, err = s.refills(ctx, snap.ID); err != nil {
+		return nil, err
+	}
 	return st, nil
+}
+
+// refills returns a cycle's refill evaluations, in channel order.
+func (s *Store) refills(ctx context.Context, snapshotID string) ([]RefillStatus, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.record, d.record, NULL FROM intents i JOIN decisions d ON d.intent_id = i.id
+		WHERE i.snapshot_id = ? AND i.action = 'rebalance'
+		UNION ALL
+		SELECT NULL, NULL, record FROM abstentions WHERE snapshot_id = ? AND json_extract(record, '$.action') = 'rebalance'`,
+		snapshotID, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RefillStatus
+	for rows.Next() {
+		var in, dec, abst sql.NullString
+		if err := rows.Scan(&in, &dec, &abst); err != nil {
+			return nil, err
+		}
+		var r RefillStatus
+		if in.Valid {
+			r.Intent, r.Decision = &contracts.Intent{}, &contracts.Decision{}
+			if err := json.Unmarshal([]byte(in.String), r.Intent); err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal([]byte(dec.String), r.Decision); err != nil {
+				return nil, err
+			}
+			r.ChanID = r.Intent.Target.ChanID
+		} else {
+			r.Abstention = &contracts.Abstention{}
+			if err := json.Unmarshal([]byte(abst.String), r.Abstention); err != nil {
+				return nil, err
+			}
+			r.ChanID = r.Abstention.ChanID
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ChanID < out[j].ChanID })
+	return out, rows.Err()
+}
+
+// ApprovedRefills returns the refill intents approved in a mode since a time,
+// newest first. As with fee changes, shadow and live are separate ledgers.
+func (s *Store) ApprovedRefills(ctx context.Context, mode contracts.Mode, since time.Time) ([]*contracts.Intent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.record FROM decisions d JOIN intents i ON i.id = d.intent_id
+		WHERE i.action = ? AND d.verdict = ? AND d.mode = ? AND d.decided_at >= ?
+		ORDER BY d.decided_at DESC`,
+		string(contracts.ActionRebalance), string(contracts.Approved), string(mode), ms(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*contracts.Intent
+	for rows.Next() {
+		var rec string
+		if err := rows.Scan(&rec); err != nil {
+			return nil, err
+		}
+		in := &contracts.Intent{}
+		if err := json.Unmarshal([]byte(rec), in); err != nil {
+			return nil, err
+		}
+		out = append(out, in)
+	}
+	return out, rows.Err()
 }

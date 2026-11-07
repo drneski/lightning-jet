@@ -236,3 +236,70 @@ func TestDirectoryIsOwnerOnly(t *testing.T) {
 
 func chanID(v uint64) contracts.ChanID { return contracts.ChanID(v) }
 func msat(v int64) contracts.MilliSat  { return contracts.MilliSat(v) }
+
+// withRefill adds a refill evaluation to each channel of a sample cycle: an
+// approved refill of channel 2 from channel 1, and an abstention for channel
+// 1, recorded after its fee intent.
+func withRefill(t *testing.T, c Cycle, at time.Time, mode contracts.Mode) Cycle {
+	t.Helper()
+	src, max := contracts.ChanID(1), contracts.MilliSat(500_000)
+	in := &contracts.Intent{ID: "r" + c.Snapshot.ID, Schema: contracts.SchemaIntent, Action: contracts.ActionRebalance,
+		Target:     contracts.Target{ChanID: 2, SourceChanID: &src},
+		Parameters: contracts.IntentParameters{Rebalance: &contracts.RebalanceParameters{AmountMsat: 1_000_000_000}},
+		Limits:     contracts.IntentLimits{MaxFeeMsat: &max},
+		Rationale:  contracts.Rationale{EstimateIDs: []string{c.Estimates[1].ID}, Summary: "refill"},
+		Strategy:   contracts.Component{Name: "refill.value", Version: "0.1.0"}, SnapshotID: c.Snapshot.ID, Mode: mode,
+		CreatedAt: at, ExpiresAt: at.Add(time.Hour)}
+	d := &contracts.Decision{ID: "rd" + c.Snapshot.ID, Schema: contracts.SchemaDecision, IntentID: in.ID, SnapshotID: c.Snapshot.ID,
+		Verdict: contracts.Approved, Rules: []contracts.RuleResult{{Rule: "mode", Passed: true, Detail: "refills in shadow"}},
+		PolicyVersion: "v1", Authorizer: "standalone", Mode: mode, DecidedAt: at}
+	ab := &contracts.Abstention{ID: "ra" + c.Snapshot.ID, Schema: contracts.SchemaAbstention, ChanID: 1, Action: contracts.ActionRebalance,
+		Strategy: contracts.Component{Name: "refill.value", Version: "0.1.0"}, SnapshotID: c.Snapshot.ID, EstimateIDs: []string{c.Estimates[0].ID},
+		Reason: contracts.NoProfitableAction, Detail: "full", WouldChangeIf: []string{"it drains"},
+		RevisitAt: at.Add(time.Hour), CreatedAt: at.Add(time.Second)}
+	c.Intents = append(c.Intents, in)
+	c.Decisions = append(c.Decisions, d)
+	c.Abstentions = append(c.Abstentions, ab)
+	return c
+}
+
+// Refill evaluations stay out of the fee readers and come back on their own.
+func TestRefillsAreKeptApartFromFees(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	if err := s.SaveCycle(ctx, withRefill(t, sampleCycle(t, "1", t0, contracts.ModeShadow), t0, contracts.ModeShadow)); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := s.LatestEvaluation(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Intent == nil || ev.Intent.Action != contracts.ActionFeeUpdate || ev.Abstention != nil {
+		t.Errorf("channel 1's latest fee evaluation: intent %+v, abstention %+v", ev.Intent, ev.Abstention)
+	}
+	st, err := s.LatestStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Approved != 1 || st.Abstentions[contracts.NoProfitableAction] != 1 || st.PerChannel[1].Abstained != contracts.NoProfitableAction ||
+		st.PerChannel[0].Proposal == nil {
+		t.Errorf("fee status = %+v", st)
+	}
+	if len(st.Refills) != 2 || st.Refills[0].ChanID != 1 || st.Refills[0].Abstention == nil ||
+		st.Refills[1].ChanID != 2 || st.Refills[1].Intent == nil || st.Refills[1].Decision.Verdict != contracts.Approved {
+		t.Errorf("refills = %+v", st.Refills)
+	}
+	approved, err := s.ApprovedRefills(ctx, contracts.ModeShadow, t0.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approved) != 1 || approved[0].Target.ChanID != 2 || *approved[0].Limits.MaxFeeMsat != 500_000 || !approved[0].CreatedAt.Equal(t0) {
+		t.Errorf("approved refills = %+v", approved)
+	}
+	if live, _ := s.ApprovedRefills(ctx, contracts.ModeLive, t0.Add(-time.Hour)); len(live) != 0 {
+		t.Errorf("live refills = %+v", live)
+	}
+	if fees, _ := s.ApprovedFeeChanges(ctx, 2, contracts.ModeShadow, t0.Add(-time.Hour)); len(fees) != 0 {
+		t.Errorf("a refill counted as a fee change: %v", fees)
+	}
+}
