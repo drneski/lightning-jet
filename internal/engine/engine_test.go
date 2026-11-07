@@ -122,6 +122,10 @@ func TestCycleRecordsAnIntentOrAnAbstentionForEveryChannel(t *testing.T) {
 	if len(estimates) != 2*sum.Channels || kinds[economics.KindOutboundRevenue] != sum.Channels || kinds[economics.KindReplacementCost] != sum.Channels {
 		t.Errorf("estimates by kind = %v for %d channels", kinds, sum.Channels)
 	}
+	// The intent rests on both.
+	if len(busy.Intent.Rationale.EstimateIDs) != 2 {
+		t.Errorf("busy channel's intent rests on %v", busy.Intent.Rationale.EstimateIDs)
+	}
 
 	for ch, want := range map[contracts.ChanID]contracts.AbstentionReason{balanced: contracts.NoProfitableAction, fullQuiet: contracts.InsufficientEvidence} {
 		ev, err := st.LatestEvaluation(ctx, ch)

@@ -36,7 +36,7 @@ func estimate(level contracts.ConfidenceLevel) *contracts.Estimate {
 var snap = &contracts.Snapshot{ID: "s1"}
 
 func TestInsideTheBandIsNoProfitableAction(t *testing.T) {
-	intent, abst := strategy().Evaluate(snap, channel(54, 500), estimate(contracts.ConfidenceHigh))
+	intent, abst := strategy().Evaluate(snap, channel(54, 500), estimate(contracts.ConfidenceHigh), nil)
 	if intent != nil || abst == nil || abst.Reason != contracts.NoProfitableAction {
 		t.Fatalf("got intent %v, abstention %+v", intent, abst)
 	}
@@ -46,7 +46,7 @@ func TestInsideTheBandIsNoProfitableAction(t *testing.T) {
 }
 
 func TestOutsideTheBandWithoutEvidenceAbstains(t *testing.T) {
-	_, abst := strategy().Evaluate(snap, channel(90, 500), estimate(contracts.ConfidenceLow))
+	_, abst := strategy().Evaluate(snap, channel(90, 500), estimate(contracts.ConfidenceLow), nil)
 	if abst == nil || abst.Reason != contracts.InsufficientEvidence {
 		t.Fatalf("got %+v", abst)
 	}
@@ -61,14 +61,14 @@ func TestOutsideTheBandWithoutEvidenceAbstains(t *testing.T) {
 func TestUntrustedInputsAreInsufficientData(t *testing.T) {
 	ch := channel(90, 500)
 	ch.DataQuality = contracts.DataQuality{Level: contracts.DataInsufficient, Issues: []string{"forwarding history unavailable: timeout"}}
-	_, abst := strategy().Evaluate(snap, ch, estimate(contracts.ConfidenceNone))
+	_, abst := strategy().Evaluate(snap, ch, estimate(contracts.ConfidenceNone), nil)
 	if abst == nil || abst.Reason != contracts.InsufficientData || !strings.Contains(abst.Detail, "forwarding history unavailable") {
 		t.Fatalf("got %+v", abst)
 	}
 }
 
 func TestFullChannelProposesALowerFee(t *testing.T) {
-	intent, abst := strategy().Evaluate(snap, channel(92, 500), estimate(contracts.ConfidenceMedium))
+	intent, abst := strategy().Evaluate(snap, channel(92, 500), estimate(contracts.ConfidenceMedium), nil)
 	if abst != nil {
 		t.Fatalf("abstained: %+v", abst)
 	}
@@ -88,22 +88,57 @@ func TestFullChannelProposesALowerFee(t *testing.T) {
 }
 
 func TestDrainedChannelProposesAHigherFee(t *testing.T) {
-	intent, _ := strategy().Evaluate(snap, channel(10, 500), estimate(contracts.ConfidenceHigh))
+	intent, _ := strategy().Evaluate(snap, channel(10, 500), estimate(contracts.ConfidenceHigh), nil)
 	if intent == nil || intent.Parameters.Fee.FeePPM != 550 {
 		t.Fatalf("got %+v", intent)
 	}
 }
 
 func TestStepIsAtLeastOnePPM(t *testing.T) {
-	intent, _ := strategy().Evaluate(snap, channel(92, 5), estimate(contracts.ConfidenceMedium))
+	intent, _ := strategy().Evaluate(snap, channel(92, 5), estimate(contracts.ConfidenceMedium), nil)
 	if intent == nil || intent.Parameters.Fee.FeePPM != 4 {
 		t.Fatalf("got %+v", intent)
 	}
 }
 
 func TestNothingBelowZero(t *testing.T) {
-	_, abst := strategy().Evaluate(snap, channel(92, 0), estimate(contracts.ConfidenceMedium))
+	_, abst := strategy().Evaluate(snap, channel(92, 0), estimate(contracts.ConfidenceMedium), nil)
 	if abst == nil || abst.Reason != contracts.NoProfitableAction || !strings.Contains(abst.Detail, "already 0 ppm") {
 		t.Fatalf("got %+v", abst)
+	}
+}
+
+func refill(low int64) *contracts.Estimate {
+	exp, high := low+2, low+500
+	return &contracts.Estimate{ID: "r1", Kind: "replacement_cost", HorizonHours: 336, Interval: "advertised fees",
+		LowPPM: &low, ExpectedPPM: &exp, HighPPM: &high, EconomicConfidence: contracts.EconomicConfidence{Level: contracts.ConfidenceLow}}
+}
+
+// A depleted channel priced below the least a refill costs is raised by the
+// catch-up step; one priced above it by the usual step.
+func TestBelowTheRefillCostCatchesUp(t *testing.T) {
+	intent, _ := strategy().Evaluate(snap, channel(2, 300), estimate(contracts.ConfidenceMedium), refill(600))
+	if intent == nil || intent.Parameters.Fee.FeePPM != 345 {
+		t.Fatalf("got %+v", intent)
+	}
+	if !strings.Contains(intent.Rationale.Summary, "under the least a refill costs (600 ppm") ||
+		!strings.Contains(intent.Rationale.Summary, "Refill: 602 ppm expected (600 to 1100, advertised fees).") {
+		t.Errorf("summary = %q", intent.Rationale.Summary)
+	}
+	if len(intent.Rationale.EstimateIDs) != 2 || intent.Rationale.EstimateIDs[1] != "r1" {
+		t.Errorf("estimate ids = %v", intent.Rationale.EstimateIDs)
+	}
+	if err := intent.Validate(); err != nil {
+		t.Errorf("intent does not validate: %v", err)
+	}
+
+	intent, _ = strategy().Evaluate(snap, channel(2, 800), estimate(contracts.ConfidenceMedium), refill(600))
+	if intent == nil || intent.Parameters.Fee.FeePPM != 880 {
+		t.Errorf("above the refill cost: got %+v", intent)
+	}
+	// A full channel isn't raised, whatever a refill costs.
+	intent, _ = strategy().Evaluate(snap, channel(92, 400), estimate(contracts.ConfidenceMedium), refill(600))
+	if intent == nil || intent.Parameters.Fee.FeePPM != 360 {
+		t.Errorf("full channel: got %+v", intent)
 	}
 }
