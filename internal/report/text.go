@@ -58,6 +58,13 @@ func (r *Report) Text() string {
 		routesTable(&b, r.Routes, byID, t.OutFeeMsat)
 	}
 
+	if len(r.Refills) > 0 {
+		b.WriteString("\nRefills\n")
+		for _, rf := range r.Refills {
+			b.WriteString(wrap("- "+refillText(rf, byID), "  ", 80))
+		}
+	}
+
 	if notes := worthALook(chans, r.Routes, byID, t, days); len(notes) > 0 {
 		b.WriteString("\nWorth a look\n")
 		for _, n := range notes {
@@ -221,6 +228,60 @@ func decision(c Channel) string {
 var ruleWords = map[string]string{
 	"mode": "fees mode", "expiry": "expired", "freeze": "frozen", "fee_ppm_bounds": "fee bounds",
 	"fee_step": "step limit", "cooldown": "cooldown", "daily_changes": "daily limit",
+}
+
+// refillWords names the authorizer's refill rules for a reader.
+var refillWords = map[string]string{
+	"mode": "rebalance mode", "expiry": "expired", "freeze": "frozen", "rebalance_ppm": "ppm limit",
+	"rebalance_budget": "daily budget", "rebalance_cooldown": "cooldown",
+}
+
+// refillText says what Jet decided about refilling a channel. Detail and
+// WouldChangeIf are Jet's own words; channels in them go by short id.
+func refillText(rf Refilled, byID map[contracts.ChanID]Channel) string {
+	target := rf.SCID
+	if c, ok := byID[rf.ChanID]; ok {
+		target = truncate(name(c), nameWidth)
+	}
+	if rf.Abstained != "" {
+		s := target + ": no refill. " + capitalize(rf.Detail) + "."
+		if len(rf.WouldChangeIf) > 0 {
+			s += " It would refill if " + strings.Join(rf.WouldChangeIf, ", or if ") + "."
+		}
+		return s
+	}
+	source := "another channel"
+	if rf.Source != nil {
+		source = rf.Source.SCID()
+		if c, ok := byID[*rf.Source]; ok {
+			source = truncate(name(c), nameWidth)
+		}
+	}
+	s := fmt.Sprintf("%s: refill %s sats from %s, paying at most %s sats", target, sats(rf.AmountMsat), source, sats(rf.MaxFeeMsat))
+	switch {
+	case rf.Verdict == contracts.Approved && rf.Mode == contracts.ModeShadow:
+		s += ": approved in shadow, so not run."
+	case rf.Verdict == contracts.Approved:
+		s += ": approved."
+	default:
+		words := make([]string, len(rf.Blocked))
+		for i, rule := range rf.Blocked {
+			if w, ok := refillWords[rule]; ok {
+				words[i] = w
+			} else {
+				words[i] = strings.ReplaceAll(rule, "_", " ")
+			}
+		}
+		s += ": held: " + strings.Join(words, ", ") + "."
+	}
+	return s
+}
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // historyRules are the limits that count earlier approvals.

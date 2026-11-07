@@ -16,6 +16,7 @@ var rawColumns = []string{
 	"competing_channels", "competing_p25_ppm", "competing_median_ppm", "competing_p75_ppm",
 	"refill_expected_ppm", "refill_low_ppm", "refill_high_ppm",
 	"result", "blocked", "mode", "prior_approvals_24h",
+	"refill_result", "refill_source_chan_id", "refill_amount_msat", "refill_max_fee_msat",
 }
 
 // Raw renders the report as tab-separated values, one row per channel with
@@ -24,6 +25,10 @@ var rawColumns = []string{
 func (r *Report) Raw() string {
 	var b strings.Builder
 	b.WriteString(strings.Join(rawColumns, "\t") + "\n")
+	refills := map[contracts.ChanID]*Refilled{}
+	for i := range r.Refills {
+		refills[r.Refills[i].ChanID] = &r.Refills[i]
+	}
 	for _, c := range r.Channels {
 		f, row := c.Forwards, make([]string, 0, len(rawColumns))
 		add := func(v ...string) { row = append(row, v...) }
@@ -56,6 +61,19 @@ func (r *Report) Raw() string {
 			add(string(c.Mode), strconv.Itoa(c.PriorApprovals))
 		} else {
 			add("", "")
+		}
+		if rf := refills[c.ChanID]; rf != nil {
+			result := string(rf.Verdict)
+			if rf.Abstained != "" {
+				result = "abstained: " + string(rf.Abstained)
+			}
+			source := ""
+			if rf.Source != nil {
+				source = rf.Source.String()
+			}
+			add(result, source, msat(rf.AmountMsat), msat(rf.MaxFeeMsat))
+		} else {
+			add("", "", "", "")
 		}
 		b.WriteString(strings.Join(row, "\t") + "\n")
 	}

@@ -46,6 +46,15 @@ func TestBuild(t *testing.T) {
 		{ChanID: contracts.ChanID(uint64(800000)<<40 | 7<<16 | 1), Proposal: &contracts.FeeParameters{ObservedFeePPM: 400, FeePPM: 440},
 			Verdict: contracts.Rejected, Blocked: []string{"cooldown", "daily_changes"}, Mode: contracts.ModeShadow, PriorApprovals: 2},
 		{ChanID: 2, Abstained: contracts.AbstentionReason("insufficient_evidence")},
+	}, Refills: []store.RefillStatus{
+		{ChanID: busyID, Abstention: &contracts.Abstention{Reason: contracts.NoProfitableAction,
+			Detail:        "a refill of 1,000,000 sats from 0x0x2 would cost about 605 sats",
+			WouldChangeIf: []string{"our fee rises above about 700 ppm", "a refill costs under about 400 ppm"}}},
+		{ChanID: 2, Intent: &contracts.Intent{Target: contracts.Target{ChanID: 2, SourceChanID: &busyID},
+			Parameters: contracts.IntentParameters{Rebalance: &contracts.RebalanceParameters{AmountMsat: 500_000_000}},
+			Limits:     contracts.IntentLimits{MaxFeeMsat: mp(300_000)}, Rationale: contracts.Rationale{Summary: "Refill: worth it"}},
+			Decision: &contracts.Decision{Verdict: contracts.Rejected, Mode: contracts.ModeShadow,
+				Rules: []contracts.RuleResult{{Rule: "mode", Passed: true}, {Rule: "rebalance_budget", Passed: false}}}},
 	}}
 
 	r := Build(snap, estimates, status)
@@ -85,6 +94,16 @@ func TestBuild(t *testing.T) {
 			t.Errorf("text is missing %q:\n%s", want, text)
 		}
 	}
+	flat := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"Refills - Big[31m Peer: no refill. A refill of 1,000,000 sats from 0x0x2 would cost about 605 sats. " +
+			"It would refill if our fee rises above about 700 ppm, or if a refill costs under about 400 ppm.",
+		"- 03bbbbbbbbbb…: refill 0.5M sats from Big[31m Peer, paying at most 300 sats: held: daily budget.",
+	} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
 	if strings.ContainsAny(text, "\x1b\u202e") {
 		t.Error("an alias put a control character on the terminal")
 	}
@@ -100,7 +119,7 @@ func TestBuild(t *testing.T) {
 	if !strings.Contains(raw[0], "\tlocal_msat\tremote_msat\t") || !strings.Contains(raw[1], "\t605\t600\t1000\t") || !strings.HasPrefix(raw[0], "chan_id\tscid\tpeer\tpeer_alias") || len(strings.Split(raw[1], "\t")) != len(rawColumns) {
 		t.Errorf("raw = %q", raw[:2])
 	}
-	if !strings.Contains(raw[1], "\t3650000\t") || !strings.HasSuffix(raw[1], "\tcooldown,daily_changes\tshadow\t2") {
+	if !strings.Contains(raw[1], "\t3650000\t") || !strings.Contains(raw[1], "\tcooldown,daily_changes\tshadow\t2\tabstained: no_profitable_action\t\t0\t0") {
 		t.Errorf("raw row = %q", raw[1])
 	}
 }
