@@ -23,6 +23,27 @@ func (h history) ApprovedFeeChanges(_ context.Context, _ contracts.ChanID, _ con
 	return out, nil
 }
 
+func (history) ApprovedRefills(context.Context, contracts.Mode, time.Time) ([]*contracts.Intent, error) {
+	return nil, nil
+}
+
+// refills is a history of approved refills, and no fee changes.
+type refills []*contracts.Intent
+
+func (refills) ApprovedFeeChanges(context.Context, contracts.ChanID, contracts.Mode, time.Time) ([]time.Time, error) {
+	return nil, nil
+}
+
+func (r refills) ApprovedRefills(_ context.Context, _ contracts.Mode, since time.Time) ([]*contracts.Intent, error) {
+	var out []*contracts.Intent
+	for _, in := range r {
+		if !in.CreatedAt.Before(since) {
+			out = append(out, in)
+		}
+	}
+	return out, nil
+}
+
 func authorizer(h history) *Authorizer {
 	return &Authorizer{Config: DefaultConfig, History: h, Now: func() time.Time { return now }, NewID: func() string { return "d1" }}
 }
@@ -121,5 +142,67 @@ func TestUnknownActionIsAnError(t *testing.T) {
 	i.Action = contracts.ActionRebalance
 	if _, err := authorizer(nil).Authorize(context.Background(), i); err == nil {
 		t.Error("a rebalance was authorized without rules for it")
+	}
+}
+
+func refill(target contracts.ChanID, amountSats, maxFeeSats int64, at time.Time) *contracts.Intent {
+	src, fee := contracts.ChanID(9), contracts.MilliSat(maxFeeSats*1000)
+	return &contracts.Intent{ID: "r1", Schema: contracts.SchemaIntent, Action: contracts.ActionRebalance,
+		Target:     contracts.Target{ChanID: target, SourceChanID: &src},
+		Parameters: contracts.IntentParameters{Rebalance: &contracts.RebalanceParameters{AmountMsat: contracts.MilliSat(amountSats * 1000)}},
+		Limits:     contracts.IntentLimits{MaxFeeMsat: &fee}, SnapshotID: "s1", Mode: contracts.ModeShadow, CreatedAt: at, ExpiresAt: at.Add(time.Hour)}
+}
+
+func failedRules(d *contracts.Decision) []string {
+	var out []string
+	for _, r := range d.Rules {
+		if !r.Passed {
+			out = append(out, r.Rule)
+		}
+	}
+	return out
+}
+
+func TestRefillRules(t *testing.T) {
+	a := &Authorizer{Config: DefaultConfig, Now: func() time.Time { return now }, NewID: func() string { return "d1" }}
+
+	// 500 sats on 1M sats is 500 ppm, within 1,000; nothing else approved.
+	a.History = refills{}
+	if d := authorize(t, a, refill(7, 1_000_000, 500, now)); d.Verdict != contracts.Approved || len(d.Rules) != 6 {
+		t.Errorf("refill: %s, failed %v", d.Verdict, failedRules(d))
+	}
+
+	for name, tc := range map[string]struct {
+		history refills
+		intent  *contracts.Intent
+		config  func(c *Config)
+		want    string
+	}{
+		"over the ppm limit": {intent: refill(7, 100_000, 150, now), want: "rebalance_ppm"},
+		// 700 sats reserved today, by a refill of another channel, plus 500.
+		"over the daily budget": {history: refills{refill(8, 1_000_000, 700, now.Add(-time.Hour))}, intent: refill(7, 1_000_000, 500, now),
+			want: "rebalance_budget"},
+		"in the cooldown": {history: refills{refill(7, 100_000, 10, now.Add(-11*time.Hour))}, intent: refill(7, 1_000_000, 500, now),
+			want: "rebalance_cooldown"},
+		"frozen source": {intent: refill(7, 1_000_000, 500, now), config: func(c *Config) { c.Freeze = []contracts.ChanID{9} }, want: "freeze"},
+		"engine off":    {intent: refill(7, 1_000_000, 500, now), config: func(c *Config) { c.RebalanceMode = contracts.ModeOff }, want: "mode"},
+		"expired":       {intent: refill(7, 1_000_000, 500, now.Add(-2*time.Hour)), want: "expiry"},
+	} {
+		b := *a
+		b.History = tc.history
+		if tc.config != nil {
+			tc.config(&b.Config)
+		}
+		d := authorize(t, &b, tc.intent)
+		if failed := failedRules(d); d.Verdict != contracts.Rejected || len(failed) != 1 || failed[0] != tc.want {
+			t.Errorf("%s: %s, failed %v", name, d.Verdict, failed)
+		}
+	}
+
+	// A refill approved more than a day and a cooldown ago no longer counts.
+	b := *a
+	b.History = refills{refill(7, 1_000_000, 900, now.Add(-25*time.Hour))}
+	if d := authorize(t, &b, refill(7, 1_000_000, 500, now)); d.Verdict != contracts.Approved {
+		t.Errorf("after a day: failed %v", failedRules(d))
 	}
 }
