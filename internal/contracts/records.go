@@ -68,8 +68,62 @@ type ChannelObservation struct {
 	PeerPolicy   *Policy      `json:"peer_policy,omitempty"`
 	Forwards     Forwards     `json:"forwards"`
 	Failures     *Failures    `json:"failures,omitempty"`
+	Refills      *Refills     `json:"refills,omitempty"`
 	Competition  *Competition `json:"competition,omitempty"`
 	DataQuality  DataQuality  `json:"data_quality"`
+}
+
+// Refills are the attempts to refill a channel in LND's payment history over
+// the window: circular payments that came back to us through it, each route
+// LND tried as one attempt, newest first. Absent when the history couldn't be
+// read.
+type Refills struct {
+	WindowHours int64           `json:"window_hours"`
+	Attempts    []RefillAttempt `json:"attempts,omitempty"`
+	// Omitted counts the older attempts left out past MaxRefillAttempts.
+	Omitted int `json:"omitted,omitempty"`
+}
+
+// MaxRefillAttempts is the most attempts a snapshot keeps per channel.
+const MaxRefillAttempts = 100
+
+// RefillAttempt is one route LND tried for a refill: where it left, what it
+// would deliver and cost, and how it ended.
+type RefillAttempt struct {
+	At           time.Time     `json:"at"`
+	SourceChanID ChanID        `json:"source_chan_id"`
+	AmountMsat   MilliSat      `json:"amount_msat"`
+	FeeMsat      MilliSat      `json:"fee_msat"`
+	Hops         int           `json:"hops"`
+	Result       AttemptResult `json:"result"`
+	// FailedAt is the position on the route of the node that reported a
+	// failure, the first hop's peer being 1. Absent for one that succeeded
+	// or failed on our side.
+	FailedAt int `json:"failed_at,omitempty"`
+}
+
+// AttemptResult is how a refill attempt ended.
+type AttemptResult string
+
+const (
+	AttemptSucceeded AttemptResult = "succeeded"
+	// AttemptReached means the route carried the payment all the way back to
+	// us, and we refused it, as with a probe: the liquidity was there, at
+	// that price.
+	AttemptReached AttemptResult = "reached"
+	// AttemptNoLiquidity means a node past our channel couldn't forward it, a
+	// temporary channel failure: the route lacked the liquidity.
+	AttemptNoLiquidity AttemptResult = "no_liquidity"
+	// AttemptFailed is any other failure, ours included.
+	AttemptFailed AttemptResult = "failed"
+)
+
+// PPM is what the attempt's route charged, in ppm of what it delivered.
+func (a RefillAttempt) PPM() int64 {
+	if a.AmountMsat <= 0 {
+		return 0
+	}
+	return int64(a.FeeMsat) * 1_000_000 / int64(a.AmountMsat)
 }
 
 // Failures summarizes the forwards out of a channel that failed for lack of
