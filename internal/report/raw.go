@@ -17,11 +17,13 @@ var rawColumns = []string{
 	"refill_expected_ppm", "refill_low_ppm", "refill_high_ppm",
 	"result", "blocked", "mode", "prior_approvals_24h",
 	"refill_result", "refill_source_chan_id", "refill_amount_msat", "refill_max_fee_msat",
+	"chan_ids",
 }
 
 // Raw renders the report as tab-separated values, one row per channel with
 // every exact value, for spreadsheets and scripts. An empty cell is a value
-// that wasn't observed or estimated.
+// that wasn't observed or estimated. A peer's channels are one row, their
+// values together, and chan_ids lists them, comma-separated.
 func (r *Report) Raw() string {
 	var b strings.Builder
 	b.WriteString(strings.Join(rawColumns, "\t") + "\n")
@@ -75,6 +77,11 @@ func (r *Report) Raw() string {
 		} else {
 			add("", "", "", "")
 		}
+		ids := make([]string, len(c.ChanIDs))
+		for i, id := range c.ChanIDs {
+			ids[i] = id.String()
+		}
+		add(strings.Join(ids, ","))
 		b.WriteString(strings.Join(row, "\t") + "\n")
 	}
 	return b.String()

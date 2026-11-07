@@ -3,6 +3,9 @@
 // its capacity, the forwards that failed for lack of balance, what the
 // estimator expects next, what competing channels charge, and what Jet
 // decided. It reads Jet's records only, never LND.
+//
+// A peer's channels are one row, as Jet decides about them: their totals,
+// under the first of them, with each channel listed under it.
 package report
 
 import (
@@ -11,6 +14,7 @@ import (
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
 	"github.com/drneski/lightning-jet/v2/internal/economics"
+	"github.com/drneski/lightning-jet/v2/internal/peer"
 	"github.com/drneski/lightning-jet/v2/internal/store"
 )
 
@@ -20,9 +24,11 @@ type Report struct {
 	TakenAt     time.Time `json:"taken_at"`
 	WindowHours int64     `json:"window_hours"`
 	Totals      Totals    `json:"totals"`
-	Channels    []Channel `json:"channels"`
-	// Routes are the forwards by the pair of channels they came in and left
-	// through, the ones that earned the most first.
+	// Channels are one per peer: a peer's channels together, under the first.
+	Channels []Channel `json:"channels"`
+	// Routes are the forwards by the pair of peers they came in and left
+	// through, each peer named by its first channel, the ones that earned the
+	// most first.
 	Routes []Route `json:"routes,omitempty"`
 	// Refills are the cycle's refill evaluations, in channel order.
 	Refills []Refilled `json:"refills,omitempty"`
@@ -57,12 +63,16 @@ type Route struct {
 	FeeMsat       contracts.MilliSat `json:"fee_msat"`
 }
 
-// Channel is one channel's economics.
+// Channel is one channel's economics, or a peer's channels' together: then
+// ChanIDs lists them, ChanID first, every value is theirs together, and
+// Channels has each one's own.
 type Channel struct {
 	ChanID contracts.ChanID `json:"chan_id"`
 	// SCID is the channel id as block x transaction x output.
-	SCID string `json:"scid"`
-	Peer string `json:"peer"`
+	SCID     string             `json:"scid"`
+	ChanIDs  []contracts.ChanID `json:"chan_ids,omitempty"`
+	Channels []Member           `json:"members,omitempty"`
+	Peer     string             `json:"peer"`
 	// PeerAlias is the alias the peer announced, as recorded: untrusted text.
 	PeerAlias    string             `json:"peer_alias,omitempty"`
 	Active       bool               `json:"active"`
@@ -91,6 +101,18 @@ type Channel struct {
 	// changes to the channel approved in that mode in the 24 hours before.
 	Mode           contracts.Mode `json:"mode,omitempty"`
 	PriorApprovals int            `json:"prior_approvals_24h,omitempty"`
+}
+
+// Member is one of a peer's channels, when it has several.
+type Member struct {
+	ChanID       contracts.ChanID   `json:"chan_id"`
+	SCID         string             `json:"scid"`
+	Active       bool               `json:"active"`
+	CapacityMsat contracts.MilliSat `json:"capacity_msat"`
+	LocalMsat    contracts.MilliSat `json:"local_msat"`
+	RemoteMsat   contracts.MilliSat `json:"remote_msat"`
+	FeePPM       *int64             `json:"out_fee_ppm,omitempty"`
+	Forwards     contracts.Forwards `json:"forwards"`
 }
 
 // Forecast is the estimator's outbound revenue forecast for a channel.
@@ -161,25 +183,32 @@ func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *st
 	r := &Report{SnapshotID: snap.ID, TakenAt: snap.TakenAt}
 	t := &r.Totals
 	t.HorizonHours = horizon
-	for _, c := range snap.Channels {
+	lead := map[contracts.ChanID]contracts.ChanID{}
+	for _, g := range peer.Groups(snap.Channels) {
+		c := g.Combined
 		res := results[c.ChanID]
-		ch := Channel{ChanID: c.ChanID, SCID: c.ChanID.SCID(), Peer: c.Peer, PeerAlias: c.PeerAlias, Active: c.Active,
+		ch := Channel{ChanID: c.ChanID, SCID: c.ChanID.SCID(), ChanIDs: g.IDs(), Peer: c.Peer, PeerAlias: c.PeerAlias, Active: c.Active,
 			CapacityMsat: c.CapacityMsat, LocalMsat: c.LocalMsat, RemoteMsat: c.RemoteMsat, Forwards: c.Forwards,
 			YieldPct: yield(c.Forwards.OutFeeMsat, c.CapacityMsat, c.Forwards.WindowHours),
 			Failures: c.Failures, Competition: c.Competition, Forecast: forecasts[c.ChanID], Refill: refills[c.ChanID],
 			Result: res.Result(), Abstained: res.Abstained, Proposal: res.Proposal, Verdict: res.Verdict, Blocked: res.Blocked,
 			Mode: res.Mode, PriorApprovals: res.PriorApprovals}
-		if c.OurPolicy != nil {
-			ppm := c.OurPolicy.FeePPM
-			ch.FeePPM = &ppm
+		ch.FeePPM = feePPM(c.OurPolicy)
+		for _, m := range g.Channels {
+			lead[m.ChanID] = c.ChanID
+			t.Channels++
+			if m.Active {
+				t.Active++
+			}
+			if len(g.Channels) > 1 {
+				ch.Channels = append(ch.Channels, Member{ChanID: m.ChanID, SCID: m.ChanID.SCID(), Active: m.Active,
+					CapacityMsat: m.CapacityMsat, LocalMsat: m.LocalMsat, RemoteMsat: m.RemoteMsat, FeePPM: feePPM(m.OurPolicy),
+					Forwards: m.Forwards})
+			}
 		}
 		r.Channels = append(r.Channels, ch)
 		r.WindowHours = max(r.WindowHours, c.Forwards.WindowHours)
 
-		t.Channels++
-		if c.Active {
-			t.Active++
-		}
 		t.CapacityMsat += c.CapacityMsat
 		t.LocalMsat += c.LocalMsat
 		t.OutCount += c.Forwards.OutCount
@@ -197,9 +226,26 @@ func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *st
 	}
 	t.YieldPct = yield(t.OutFeeMsat, t.CapacityMsat, r.WindowHours)
 
+	// Routes go by peer, named by its first channel. A channel that has since
+	// closed stays as it is.
+	byPair := map[[2]contracts.ChanID]*Route{}
 	for _, rt := range snap.Routes {
-		r.Routes = append(r.Routes, Route{In: rt.In, InSCID: rt.In.SCID(), Out: rt.Out, OutSCID: rt.Out.SCID(),
-			Count: rt.Count, AmountOutMsat: rt.AmountOutMsat, FeeMsat: rt.FeeMsat})
+		in, out := rt.In, rt.Out
+		if l, ok := lead[in]; ok {
+			in = l
+		}
+		if l, ok := lead[out]; ok {
+			out = l
+		}
+		p := byPair[[2]contracts.ChanID{in, out}]
+		if p == nil {
+			r.Routes = append(r.Routes, Route{In: in, InSCID: in.SCID(), Out: out, OutSCID: out.SCID()})
+			p = &r.Routes[len(r.Routes)-1]
+			byPair[[2]contracts.ChanID{in, out}] = p
+		}
+		p.Count += rt.Count
+		p.AmountOutMsat += rt.AmountOutMsat
+		p.FeeMsat += rt.FeeMsat
 	}
 	for _, rs := range status.Refills {
 		rf := Refilled{ChanID: rs.ChanID, SCID: rs.ChanID.SCID()}
@@ -242,6 +288,14 @@ func yield(fees, capacity contracts.MilliSat, windowHours int64) float64 {
 		return 0
 	}
 	return float64(fees) / float64(capacity) * (365 * 24 / float64(windowHours)) * 100
+}
+
+func feePPM(p *contracts.Policy) *int64 {
+	if p == nil {
+		return nil
+	}
+	ppm := p.FeePPM
+	return &ppm
 }
 
 func deref(m *contracts.MilliSat) contracts.MilliSat {

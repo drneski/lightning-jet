@@ -49,9 +49,12 @@ func (r *Report) Text() string {
 		b.WriteString("\n")
 		table(&b, chans, t.HorizonHours/24)
 	}
-	byID := map[contracts.ChanID]Channel{}
+	byID := map[contracts.ChanID]Channel{} // every channel, a peer's under its row
 	for _, c := range chans {
 		byID[c.ChanID] = c
+		for _, m := range c.Channels {
+			byID[m.ChanID] = c
+		}
 	}
 	if len(r.Routes) > 0 {
 		b.WriteString("\nTop routes\n")
@@ -78,6 +81,14 @@ func (r *Report) Text() string {
 		"on our side would cost: the peer's fee to us plus the cheapest way into the peer, from advertised fees. All "+
 		"three are in ppm. Earned and "+
 		"Missed cover the %d days, and Next %dd is the forecast. Amounts are in sats.", days, t.HorizonHours/24), "", 80))
+	for _, c := range chans {
+		if len(c.Channels) > 1 {
+			b.WriteString(wrap("A peer with several channels is one row, +N its other channels, each listed under it: LND forwards "+
+				"over whichever of them can carry a payment, so Jet decides about them together. Its out fee is the highest "+
+				"of theirs, which LND senders plan with.", "", 80))
+			break
+		}
+	}
 	b.WriteString(wrap("Shadow mode: Jet changed nothing. A change it approves isn't applied, so it proposes the "+
 		"change again, and the limits count each approval as if it had been.", "", 80))
 	b.WriteString("jet explain <channel> explains a row; jet report --raw gives exact values.\n")
@@ -127,9 +138,27 @@ func table(b *strings.Builder, chans []Channel, horizonDays int64) {
 			next = sats(c.Forecast.ExpectedMsat)
 		}
 		p := pct(c.LocalMsat, c.CapacityMsat)
-		rows = append(rows, []string{truncate(name(c), nameWidth), c.SCID, fmt.Sprintf("%s %3d%%", bar(p), p),
+		id := c.SCID
+		if n := len(c.Channels); n > 1 {
+			id += fmt.Sprintf(" +%d", n-1)
+		}
+		rows = append(rows, []string{truncate(name(c), nameWidth), id, fmt.Sprintf("%s %3d%%", bar(p), p),
 			sats(c.Forwards.OutAmountMsat) + " / " + sats(c.Forwards.InAmountMsat),
 			fee, others, refill, sats(c.Forwards.OutFeeMsat), missed, next, decision(c)})
+		// A peer's channels, each under the row of them together.
+		for _, m := range c.Channels {
+			p := pct(m.LocalMsat, m.CapacityMsat)
+			fee := "-"
+			if m.FeePPM != nil {
+				fee = strconv.FormatInt(*m.FeePPM, 10)
+			}
+			state := ""
+			if !m.Active {
+				state = "inactive"
+			}
+			rows = append(rows, []string{"", "  " + m.SCID, fmt.Sprintf("%s %3d%%", bar(p), p),
+				sats(m.Forwards.OutAmountMsat) + " / " + sats(m.Forwards.InAmountMsat), fee, "", "", sats(m.Forwards.OutFeeMsat), "", "", state})
+		}
 	}
 	columns(b, heads, right, rows)
 }
@@ -208,6 +237,11 @@ func decision(c Channel) string {
 		s = "data incomplete, so no decision"
 	case c.Abstained != "":
 		s = strings.ReplaceAll(string(c.Abstained), "_", " ")
+	case c.Proposal != nil && c.Proposal.FeePPM == c.Proposal.ObservedFeePPM && len(c.Channels) > 1:
+		s = fmt.Sprintf("would set all its channels to %d ppm", c.Proposal.FeePPM)
+		if c.Verdict == contracts.Rejected {
+			s += "; " + held(c)
+		}
 	case c.Proposal != nil:
 		verb := "raise"
 		if c.Proposal.FeePPM < c.Proposal.ObservedFeePPM {

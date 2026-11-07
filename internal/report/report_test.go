@@ -166,3 +166,48 @@ func TestDrySource(t *testing.T) {
 		}
 	}
 }
+
+// A peer's channels are one row with each channel under it, and routes
+// through either are one route.
+func TestAPeersChannelsAreOneRow(t *testing.T) {
+	at := time.Date(2026, 11, 6, 17, 0, 0, 0, time.UTC)
+	old, young, in := contracts.ChanID(uint64(800000)<<40|1), contracts.ChanID(uint64(850000)<<40|1), contracts.ChanID(uint64(700000)<<40|1)
+	fw := func(out int, fee contracts.MilliSat) contracts.Forwards {
+		return contracts.Forwards{WindowHours: 720, OutCount: out, OutAmountMsat: contracts.MilliSat(out) * 100_000_000, OutFeeMsat: fee}
+	}
+	snap := &contracts.Snapshot{ID: "s1", TakenAt: at, Channels: []contracts.ChannelObservation{
+		{ChanID: in, Peer: "03cc", PeerAlias: "Source", Active: true, CapacityMsat: 5_000_000_000, OurPolicy: &contracts.Policy{FeePPM: 10}},
+		{ChanID: old, Peer: "03dd", PeerAlias: "Sink", Active: true, CapacityMsat: 5_000_000_000, LocalMsat: 100_000_000,
+			OurPolicy: &contracts.Policy{FeePPM: 1000}, Forwards: fw(3, 300_000)},
+		{ChanID: young, Peer: "03dd", PeerAlias: "Sink", Active: true, CapacityMsat: 5_000_000_000, LocalMsat: 4_900_000_000,
+			OurPolicy: &contracts.Policy{FeePPM: 1000}, Forwards: fw(1, 100_000)},
+	}, Routes: []contracts.Route{
+		{In: in, Out: old, Count: 3, AmountOutMsat: 300_000_000, FeeMsat: 300_000},
+		{In: in, Out: young, Count: 1, AmountOutMsat: 100_000_000, FeeMsat: 100_000},
+	}}
+	status := &store.Status{PerChannel: []store.ChannelStatus{
+		{ChanID: in, Abstained: contracts.InsufficientEvidence},
+		{ChanID: old, ChanIDs: []contracts.ChanID{old, young}, Abstained: contracts.NoProfitableAction},
+	}}
+	r := Build(snap, nil, status)
+	if len(r.Channels) != 2 || r.Totals.Channels != 3 || r.Totals.Active != 3 {
+		t.Fatalf("rows %d, totals %+v", len(r.Channels), r.Totals)
+	}
+	sink := r.Channels[1]
+	if sink.ChanID != old || len(sink.ChanIDs) != 2 || len(sink.Channels) != 2 || sink.LocalMsat != 5_000_000_000 ||
+		sink.Forwards.OutCount != 4 || sink.Result != "abstained: no profitable action" {
+		t.Errorf("sink = %+v", sink)
+	}
+	if len(r.Routes) != 1 || r.Routes[0].Out != old || r.Routes[0].Count != 4 || r.Routes[0].FeeMsat != 400_000 {
+		t.Errorf("routes = %+v", r.Routes)
+	}
+	text := r.Text()
+	for _, want := range []string{"800000x0x1 +1", "  800000x0x1", "  850000x0x1", "Source → Sink", "A peer with several channels is one row"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lacks %q:\n%s", want, text)
+		}
+	}
+	if !strings.Contains(r.Raw(), "\t"+old.String()+","+young.String()+"\n") {
+		t.Errorf("raw lacks the chan_ids:\n%s", r.Raw())
+	}
+}
