@@ -93,6 +93,19 @@ type Competition struct {
 	FeePPMMedian   int64     `json:"fee_ppm_median"`
 	FeePPMP75      int64     `json:"fee_ppm_p75"`
 	BaseMsatMedian MilliSat  `json:"base_msat_median"`
+	// Neighbor is the cheapest of these channels whose far end is also our
+	// peer. A refill can take it in two hops: out through our channel to
+	// that peer, and back to us through this one. Absent when no other peer
+	// of ours has a channel into this one.
+	Neighbor *Neighbor `json:"neighbor,omitempty"`
+}
+
+// Neighbor is another of our peers with a channel into this channel's peer,
+// and what it charges to forward into it.
+type Neighbor struct {
+	Pubkey   string   `json:"pubkey"`
+	FeePPM   int64    `json:"fee_ppm"`
+	BaseMsat MilliSat `json:"base_msat"`
 }
 
 // Policy is one side's routing policy for a channel.

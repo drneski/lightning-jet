@@ -227,6 +227,9 @@ func TestCompetitionFromTheGraph(t *testing.T) {
 		{ChanID: 14, Node1Pub: other(4), Node2Pub: peer, Node1Policy: nil},             // not gossiped
 		{ChanID: 15, Node1Pub: peer, Node2Pub: other(5), Node1Policy: far(5, false)},   // the peer's own side: not a competitor's price
 	}}}
+	// Another peer of ours, other(1), has a channel into the peer: the
+	// neighbor, though other(0) and other(2) charge less.
+	f.Channels = append(f.Channels, lnd.Channel{ChanID: 3, RemotePubkey: other(1), Active: true, CapacitySat: 1_000_000, LocalSat: 900_000})
 	o := observer(f)
 	o.GossipEvery = 24 * time.Hour
 	snap, err := o.Snapshot(context.Background())
@@ -237,6 +240,9 @@ func TestCompetitionFromTheGraph(t *testing.T) {
 	comp := c1.Competition
 	if comp == nil || comp.Channels != 3 || comp.FeePPMP25 != 100 || comp.FeePPMMedian != 200 || comp.FeePPMP75 != 200 || comp.BaseMsatMedian != 1000 {
 		t.Fatalf("competition = %+v", comp)
+	}
+	if n := comp.Neighbor; n == nil || n.Pubkey != other(1) || n.FeePPM != 300 || n.BaseMsat != 1000 {
+		t.Errorf("neighbor = %+v", n)
 	}
 	if c1.PeerAlias != "synthetic peer" || !hasSource(snap, "lnd.graph.node") {
 		t.Errorf("alias %q, sources %+v", c1.PeerAlias, snap.Sources)

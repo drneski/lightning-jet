@@ -92,6 +92,10 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 		}
 	}
 	gossipRead := false
+	ours := map[string]bool{}
+	for _, ch := range channels {
+		ours[ch.RemotePubkey] = true
+	}
 
 	snap := &contracts.Snapshot{
 		ID: o.NewID(), Schema: contracts.SchemaSnapshot, NodePubkey: info.IdentityPubkey,
@@ -150,7 +154,7 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 		}
 
 		if o.GossipEvery > 0 {
-			g, fresh, err := o.peerGossip(ctx, ch.RemotePubkey, info.IdentityPubkey, now)
+			g, fresh, err := o.peerGossip(ctx, ch.RemotePubkey, info.IdentityPubkey, ours, now)
 			switch {
 			case err != nil:
 				// A missing prior doesn't lower the quality of what was observed.
@@ -185,9 +189,10 @@ func (o *Observer) Snapshot(ctx context.Context) (*contracts.Snapshot, error) {
 // peerGossip reads a peer's alias from the graph, and summarizes what the
 // other channels into the peer advertise: for each, the policy of the node on
 // its far side, which is what that node charges to forward into the peer. Our
-// own channels are left out. Readings are cached for GossipEvery; fresh
+// own channels are left out. The cheapest of them whose far node is in ours,
+// our other peers, is the neighbor. Readings are cached for GossipEvery; fresh
 // reports whether this call read the graph.
-func (o *Observer) peerGossip(ctx context.Context, peer, us string, now time.Time) (peerGossip, bool, error) {
+func (o *Observer) peerGossip(ctx context.Context, peer, us string, ours map[string]bool, now time.Time) (peerGossip, bool, error) {
 	if g, ok := o.gossip[peer]; ok && now.Sub(g.competition.ReadAt) < o.GossipEvery {
 		return g, false, nil
 	}
@@ -196,23 +201,29 @@ func (o *Observer) peerGossip(ctx context.Context, peer, us string, now time.Tim
 		return peerGossip{}, false, err
 	}
 	var ppms, bases []int64
+	var neighbor *contracts.Neighbor
 	for _, e := range node.Channels {
 		var p *lnd.RoutingPolicy
+		var far string
 		switch {
 		case e.Node1Pub == us || e.Node2Pub == us:
 			continue
 		case e.Node1Pub == peer:
-			p = e.Node2Policy
+			p, far = e.Node2Policy, e.Node2Pub
 		case e.Node2Pub == peer:
-			p = e.Node1Policy
+			p, far = e.Node1Policy, e.Node1Pub
 		}
 		if p == nil || p.Disabled {
 			continue
 		}
 		ppms = append(ppms, p.FeeRateMilliMsat)
 		bases = append(bases, p.FeeBaseMsat)
+		if ours[far] && far != peer && (neighbor == nil || p.FeeRateMilliMsat < neighbor.FeePPM ||
+			p.FeeRateMilliMsat == neighbor.FeePPM && contracts.MilliSat(p.FeeBaseMsat) < neighbor.BaseMsat) {
+			neighbor = &contracts.Neighbor{Pubkey: far, FeePPM: p.FeeRateMilliMsat, BaseMsat: contracts.MilliSat(p.FeeBaseMsat)}
+		}
 	}
-	c := &contracts.Competition{ReadAt: now, Channels: len(ppms)}
+	c := &contracts.Competition{ReadAt: now, Channels: len(ppms), Neighbor: neighbor}
 	if len(ppms) > 0 {
 		c.FeePPMP25, c.FeePPMMedian, c.FeePPMP75 = percentile(ppms, 25), percentile(ppms, 50), percentile(ppms, 75)
 		c.BaseMsatMedian = contracts.MilliSat(percentile(bases, 50))
