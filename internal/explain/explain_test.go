@@ -65,6 +65,7 @@ Proposed    Nothing (insufficient evidence): outbound_revenue has economic confi
 Decided     No intent, so no authorization.
 Next        Evaluated again 2026-10-26 01:00 UTC.
             Would act if at least 10 outbound forwards through this channel within 30 days.
+Refill      Not evaluated in this cycle: Jet evaluates refills of depleted channels only.
 `
 	if got != want {
 		t.Errorf("text:\n%s\nwant:\n%s", got, want)
@@ -172,5 +173,95 @@ func TestFailuresAndPriorsAreShown(t *testing.T) {
 	}
 	if n := strings.Count(text, "Prior: 40 other channels"); n != 1 {
 		t.Errorf("the shared prior is shown %d times", n)
+	}
+}
+
+func refillAbstention(ev *store.Evaluation) *store.Evaluation {
+	return &store.Evaluation{Snapshot: ev.Snapshot, Abstention: &contracts.Abstention{ChanID: 111111111111111111, Action: contracts.ActionRebalance,
+		Reason: contracts.NoProfitableAction, Detail: "a refill of 1,000,000 sats from 0x0x2 would cost about 605 sats",
+		WouldChangeIf: []string{"our fee rises above about 700 ppm"}, RevisitAt: at.Add(time.Hour)}}
+}
+
+func TestRefillAbstentionText(t *testing.T) {
+	ev := abstentionEvaluation()
+	x, err := Build(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := x.AddRefill(refillAbstention(ev)); err != nil {
+		t.Fatal(err)
+	}
+	text := x.Text()
+	for _, want := range []string{
+		"Refill      Nothing (no profitable action): a refill of 1,000,000 sats from 0x0x2 would cost about 605 sats.",
+		"            Next: evaluated again 2026-10-26 01:00 UTC.",
+		"            Would refill if our fee rises above about 700 ppm.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	if x.Refill == nil || x.Refill.Next.RevisitAt == nil || x.Refill.Decided != nil {
+		t.Errorf("refill = %+v", x.Refill)
+	}
+}
+
+func TestRefillIntentText(t *testing.T) {
+	ev := abstentionEvaluation()
+	x, err := Build(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, max := contracts.ChanID(800000<<40|2<<16), contracts.MilliSat(800_000)
+	refill := &store.Evaluation{Snapshot: ev.Snapshot,
+		Intent: &contracts.Intent{ID: "r1", Action: contracts.ActionRebalance, Target: contracts.Target{ChanID: 111111111111111111, SourceChanID: &src},
+			Parameters: contracts.IntentParameters{Rebalance: &contracts.RebalanceParameters{AmountMsat: 1_000_000_000}},
+			Limits:     contracts.IntentLimits{MaxFeeMsat: &max}, Rationale: contracts.Rationale{Summary: "Refill: worth it."},
+			ExpiresAt: at.Add(time.Hour)},
+		Decision: &contracts.Decision{Verdict: contracts.Rejected, Mode: contracts.ModeShadow, Rules: []contracts.RuleResult{
+			{Rule: "mode", Passed: true, Detail: "the rebalance engine is shadow"},
+			{Rule: "rebalance_budget", Passed: false, Detail: "700 sats reserved by refills approved in the last 24 hours, plus this one's 800, against 1000 a day"}}},
+		Outcomes: []*contracts.Outcome{{State: contracts.NotExecuted, Detail: "rejected: rebalance_budget"}}}
+	if err := x.AddRefill(refill); err != nil {
+		t.Fatal(err)
+	}
+	text := x.Text()
+	for _, want := range []string{
+		"Refill      Move 1,000,000 sats in from 800000x2x0, paying at most 800 sats, by 2026-10-26 01:00 UTC.",
+		"            Refill: worth it.",
+		"            Decided: Rejected in shadow mode: 1 of 2 rules passed.",
+		"            FAIL  rebalance_budget: 700 sats reserved",
+		"            Next: rejected: rebalance_budget; evaluated again in the next cycle.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text is missing %q:\n%s", want, text)
+		}
+	}
+	if x.Refill.Next.Outcome != contracts.NotExecuted {
+		t.Errorf("refill next = %+v", x.Refill.Next)
+	}
+}
+
+// A refill evaluation from another cycle or of another channel isn't added.
+func TestAddRefillChecksItsCycleAndChannel(t *testing.T) {
+	ev := abstentionEvaluation()
+	x, err := Build(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := refillAbstention(ev)
+	other.Abstention.ChanID = 2
+	if err := x.AddRefill(other); err == nil {
+		t.Error("another channel's refill was added")
+	}
+	later := refillAbstention(ev)
+	s := *ev.Snapshot
+	s.ID = "later"
+	later.Snapshot = &s
+	if err := x.AddRefill(later); err == nil {
+		t.Error("another cycle's refill was added")
+	}
+	if x.Refill != nil {
+		t.Errorf("refill = %+v", x.Refill)
 	}
 }

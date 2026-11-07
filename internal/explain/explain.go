@@ -23,6 +23,17 @@ type Explanation struct {
 	Proposed  Proposed              `json:"proposed"`
 	Decided   *Decided              `json:"decided,omitempty"`
 	Next      Next                  `json:"next"`
+	// Refill is the same cycle's refill evaluation of the channel, when it
+	// had one.
+	Refill *Refill `json:"refill,omitempty"`
+}
+
+// Refill is a refill evaluation: what the refill strategy proposed, what
+// authorization decided, and what happens next.
+type Refill struct {
+	Proposed Proposed `json:"proposed"`
+	Decided  *Decided `json:"decided,omitempty"`
+	Next     Next     `json:"next"`
 }
 
 // Observed is the channel as the snapshot saw it.
@@ -87,20 +98,40 @@ func Build(ev *store.Evaluation) (*Explanation, error) {
 			Failures: ch.Failures, Competition: ch.Competition, DataQuality: ch.DataQuality,
 		},
 		Estimated: ev.Estimates,
-		Proposed:  Proposed{Intent: ev.Intent, Abstention: ev.Abstention},
 	}
+	x.Proposed, x.Decided, x.Next = parts(ev)
+	return x, nil
+}
+
+// AddRefill adds the channel's refill evaluation from the same cycle.
+func (x *Explanation) AddRefill(ev *store.Evaluation) error {
+	switch {
+	case ev.Snapshot == nil || ev.Snapshot.ID != x.Observed.SnapshotID:
+		return fmt.Errorf("explain: the refill evaluation is from another cycle")
+	case ev.Intent != nil && ev.Intent.Target.ChanID != x.ChanID, ev.Abstention != nil && ev.Abstention.ChanID != x.ChanID:
+		return fmt.Errorf("explain: the refill evaluation is of another channel")
+	case ev.Intent == nil && ev.Abstention == nil:
+		return fmt.Errorf("explain: the refill evaluation has neither an intent nor an abstention")
+	}
+	r := &Refill{}
+	r.Proposed, r.Decided, r.Next = parts(ev)
+	x.Refill = r
+	return nil
+}
+
+// parts are what an evaluation proposed, what was decided, and what's next.
+func parts(ev *store.Evaluation) (Proposed, *Decided, Next) {
+	p := Proposed{Intent: ev.Intent, Abstention: ev.Abstention}
 	if a := ev.Abstention; a != nil {
 		revisit := a.RevisitAt
-		x.Next = Next{RevisitAt: &revisit, WouldChangeIf: a.WouldChangeIf, Note: "nothing to execute"}
-		return x, nil
+		return p, nil, Next{RevisitAt: &revisit, WouldChangeIf: a.WouldChangeIf, Note: "nothing to execute"}
 	}
-	x.Decided = &Decided{Decision: ev.Decision, Outcomes: ev.Outcomes}
-	x.Next.Note = "evaluated again in the next cycle"
+	next := Next{Note: "evaluated again in the next cycle"}
 	if n := len(ev.Outcomes); n > 0 {
-		x.Next.Outcome = ev.Outcomes[n-1].State
-		x.Next.Note = ev.Outcomes[n-1].Detail + "; evaluated again in the next cycle"
+		next.Outcome = ev.Outcomes[n-1].State
+		next.Note = ev.Outcomes[n-1].Detail + "; evaluated again in the next cycle"
 	}
-	return x, nil
+	return p, &Decided{Decision: ev.Decision, Outcomes: ev.Outcomes}, next
 }
 
 // Text renders the explanation for a terminal.
@@ -154,37 +185,83 @@ func (x *Explanation) Text() string {
 	if a := x.Proposed.Abstention; a != nil {
 		line("Proposed", "Nothing (%s): %s.", strings.ReplaceAll(string(a.Reason), "_", " "), a.Detail)
 		line("Decided", "No intent, so no authorization.")
-		line("Next", "Evaluated again %s.", a.RevisitAt.Format("2006-01-02 15:04 MST"))
+		line("Next", "Evaluated again %s.", a.RevisitAt.Format(stamp))
 		for _, w := range a.WouldChangeIf {
 			more("Would act if %s.", w)
 		}
-		return b.String()
+	} else {
+		i := x.Proposed.Intent
+		if fee := i.Parameters.Fee; fee != nil {
+			line("Proposed", "Change the fee from %d to %d ppm, base %s msat unchanged, by %s.", fee.ObservedFeePPM, fee.FeePPM,
+				commas(int64(fee.BaseMsat)), i.ExpiresAt.Format(stamp))
+		}
+		more("%s", i.Rationale.Summary)
+		if d := x.Decided; d != nil && d.Decision != nil {
+			line("Decided", "%s.", verdict(d.Decision))
+			rules(more, d.Decision)
+		}
+		line("Next", "%s.", capitalize(x.Next.Note))
 	}
 
-	i := x.Proposed.Intent
-	if fee := i.Parameters.Fee; fee != nil {
-		line("Proposed", "Change the fee from %d to %d ppm, base %s msat unchanged, by %s.", fee.ObservedFeePPM, fee.FeePPM,
-			commas(int64(fee.BaseMsat)), i.ExpiresAt.Format("2006-01-02 15:04 MST"))
-	}
-	more("%s", i.Rationale.Summary)
-	if d := x.Decided; d != nil && d.Decision != nil {
-		passed := 0
-		for _, r := range d.Decision.Rules {
-			if r.Passed {
-				passed++
-			}
+	// The refill decision sits under its own label, each part named.
+	r := x.Refill
+	switch {
+	case r == nil:
+		line("Refill", "Not evaluated in this cycle: Jet evaluates refills of depleted channels only.")
+	case r.Proposed.Abstention != nil:
+		a := r.Proposed.Abstention
+		line("Refill", "Nothing (%s): %s.", strings.ReplaceAll(string(a.Reason), "_", " "), a.Detail)
+		more("Next: evaluated again %s.", a.RevisitAt.Format(stamp))
+		for _, w := range a.WouldChangeIf {
+			more("Would refill if %s.", w)
 		}
-		line("Decided", "%s in %s mode: %d of %d rules passed.", capitalize(string(d.Decision.Verdict)), d.Decision.Mode, passed, len(d.Decision.Rules))
-		for _, r := range d.Decision.Rules {
-			mark := "pass"
-			if !r.Passed {
-				mark = "FAIL"
-			}
-			more("%s  %s: %s", mark, r.Rule, r.Detail)
+	case r.Proposed.Intent != nil:
+		i := r.Proposed.Intent
+		source := "another channel"
+		if i.Target.SourceChanID != nil {
+			source = i.Target.SourceChanID.SCID()
 		}
+		var amount, maxFee contracts.MilliSat
+		if i.Parameters.Rebalance != nil {
+			amount = i.Parameters.Rebalance.AmountMsat
+		}
+		if i.Limits.MaxFeeMsat != nil {
+			maxFee = *i.Limits.MaxFeeMsat
+		}
+		line("Refill", "Move %s sats in from %s, paying at most %s sats, by %s.", commas(amount.Sats()), source,
+			commas(maxFee.Sats()), i.ExpiresAt.Format(stamp))
+		more("%s", i.Rationale.Summary)
+		if d := r.Decided; d != nil && d.Decision != nil {
+			more("Decided: %s.", verdict(d.Decision))
+			rules(more, d.Decision)
+		}
+		more("Next: %s.", r.Next.Note)
 	}
-	line("Next", "%s.", capitalize(x.Next.Note))
 	return b.String()
+}
+
+const stamp = "2006-01-02 15:04 MST"
+
+// verdict says how a decision came out: its verdict, mode and rules passed.
+func verdict(d *contracts.Decision) string {
+	passed := 0
+	for _, r := range d.Rules {
+		if r.Passed {
+			passed++
+		}
+	}
+	return fmt.Sprintf("%s in %s mode: %d of %d rules passed", capitalize(string(d.Verdict)), d.Mode, passed, len(d.Rules))
+}
+
+// rules lists a decision's rules, each marked pass or FAIL.
+func rules(more func(string, ...any), d *contracts.Decision) {
+	for _, r := range d.Rules {
+		mark := "pass"
+		if !r.Passed {
+			mark = "FAIL"
+		}
+		more("%s  %s: %s", mark, r.Rule, r.Detail)
+	}
 }
 
 func policy(p *contracts.Policy) string {

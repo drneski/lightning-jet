@@ -242,6 +242,12 @@ It answers five questions in order:
 5. **Next.** The outcome so far, when the channel is evaluated again, and what
    would change the decision.
 
+Those are the fee decision. The refill decision from the same cycle follows
+under its own label: the refill proposed (amount, source, maximum fee, expiry)
+with its verdict and rules, or the abstention and what would make Jet refill.
+A channel that isn't depleted isn't evaluated for a refill, and the
+explanation says so.
+
 `jet explain --json` emits the same content as structured data, which is the
 stable contract. The text form is presentation and may change. An optional
 language model may later narrate the JSON, in a separate process. It never
@@ -257,7 +263,8 @@ too few to measure a fee experiment against, so the strategy abstains.
   "id": "01a17581-c000-7d1a-99b6-e2f0c1d3e4a5",
   "schema": "jet.abstention/1",
   "chan_id": "111111111111111111",
-  "strategy": {"name": "fee.balance-band", "version": "0.1.0"},
+  "strategy": {"name": "fee.balance-band", "version": "0.2.0"},
+  "action": "fee_update",
   "snapshot_id": "01a17581-b830-7c3b-98d2-e6a4b5c6d7e8",
   "estimate_ids": ["01a17581-bc18-7e4c-99f1-a3b2c4d5e6f7"],
   "reason": "insufficient_evidence",
@@ -282,6 +289,7 @@ Proposed    Nothing (insufficient evidence): outbound_revenue has economic confi
 Decided     No intent, so no authorization.
 Next        Evaluated again 2026-10-26 01:00 UTC.
             Would act if at least 10 outbound forwards through this channel within 30 days.
+Refill      Not evaluated in this cycle: Jet evaluates refills of depleted channels only.
 ```
 
 The text is presentation; `jet explain --json` is the contract. The explain
