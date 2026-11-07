@@ -32,6 +32,7 @@ import (
 	"github.com/drneski/lightning-jet/v2/internal/limits"
 	"github.com/drneski/lightning-jet/v2/internal/lnd"
 	"github.com/drneski/lightning-jet/v2/internal/observe"
+	"github.com/drneski/lightning-jet/v2/internal/peer"
 	"github.com/drneski/lightning-jet/v2/internal/record"
 	"github.com/drneski/lightning-jet/v2/internal/report"
 	"github.com/drneski/lightning-jet/v2/internal/store"
@@ -342,17 +343,38 @@ func cmdStatus(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		fmt.Fprintln(stdout, line)
 	}
 
-	if len(s.PerChannel) > 0 {
-		fmt.Fprintln(stdout, "\nChannel              Local  Result")
+	ids, width := make([]string, len(s.PerChannel)), 20
+	for i, c := range s.PerChannel {
+		ids[i] = c.ChanID.String()
+		if n := len(c.ChanIDs); n > 1 {
+			ids[i] += fmt.Sprintf(" +%d", n-1) // the peer's other channels, decided with it
+		}
+		width = max(width, len(ids[i])+1)
 	}
-	for _, c := range s.PerChannel {
+	if len(s.PerChannel) > 0 {
+		fmt.Fprintf(stdout, "\n%-*s Local  Result\n", width, "Channel")
+	}
+	for i, c := range s.PerChannel {
 		local := "-"
 		if c.CapacityMsat > 0 {
 			local = fmt.Sprintf("%d%%", int64(c.LocalMsat)*100/int64(c.CapacityMsat))
 		}
-		fmt.Fprintf(stdout, "%-20s %5s  %s\n", c.ChanID, local, c.Result())
+		fmt.Fprintf(stdout, "%-*s %5s  %s\n", width, ids[i], local, c.Result())
+	}
+	if grouped(s.PerChannel) {
+		fmt.Fprintln(stdout, "\n+N: the peer has N more channels, decided together with this one; Local is theirs together.")
 	}
 	return nil
+}
+
+// grouped reports whether any peer in the status has several channels.
+func grouped(cs []store.ChannelStatus) bool {
+	for _, c := range cs {
+		if len(c.ChanIDs) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func cmdExplain(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -378,7 +400,18 @@ func cmdExplain(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return err
 	}
 	defer st.Close()
-	ev, err := st.LatestEvaluation(ctx, chanID)
+	// A peer's channels are decided together, under the first of them.
+	lead := chanID
+	switch snap, err := st.LatestSnapshot(ctx); {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return err
+	default:
+		if g, ok := peer.Find(peer.Groups(snap.Channels), chanID); ok {
+			lead = g.Combined.ChanID
+		}
+	}
+	ev, err := st.LatestEvaluation(ctx, lead)
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("no decision recorded for channel %s", chanID)
 	}
@@ -389,7 +422,7 @@ func cmdExplain(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	if err != nil {
 		return err
 	}
-	switch refill, err := st.RefillEvaluation(ctx, chanID, ev.Snapshot.ID); {
+	switch refill, err := st.RefillEvaluation(ctx, lead, ev.Snapshot.ID); {
 	case errors.Is(err, store.ErrNotFound):
 	case err != nil:
 		return err
