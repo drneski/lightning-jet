@@ -164,3 +164,47 @@ func TestOnlyDepletedChannelsAreTargets(t *testing.T) {
 		}
 	}
 }
+
+// Another channel to the target's peer is never the source: the refill would
+// only move sats from one of the peer's channels to the other.
+func TestTheTargetsOwnPeerIsNoSource(t *testing.T) {
+	target, all := node(1000, 1_000_000, 1_400_000)
+	all[1].Obs.LocalMsat = 2_000_000_000 // the neighbor has nothing to spare
+	all[2].Obs.LocalMsat = 2_000_000_000 // nor has channel 3
+	sibling := all[2]
+	sibling.Obs.ChanID, sibling.Obs.Peer, sibling.Obs.LocalMsat = 4, target.Obs.Peer, 4_950_000_000
+	_, abst := strategy().Evaluate(snap, target, append(all, sibling))
+	if abst == nil || !strings.Contains(abst.Detail, "no channel has 1,400,000 sats to spare") {
+		t.Fatalf("got %+v", abst)
+	}
+}
+
+// A peer with several channels is refilled as one, and a source with several
+// leaves through its fullest.
+func TestAPeersChannelsAreRefilledAsOne(t *testing.T) {
+	target, all := node(1000, 1_000_000, 1_400_000)
+	second := target.Obs
+	second.ChanID, second.LocalMsat = 6, 0
+	target.Channels = []contracts.ChannelObservation{target.Obs, second}
+	target.Obs.CapacityMsat *= 2 // 100k of 10M sats: still depleted
+
+	// The neighbor has two channels, 2M and 4.95M sats on our side.
+	a, b := all[1].Obs, all[1].Obs
+	a.LocalMsat, b.ChanID, b.LocalMsat = 2_000_000_000, 5, 4_950_000_000
+	nb := all[1]
+	nb.Obs.CapacityMsat, nb.Obs.LocalMsat, nb.Channels = 10_000_000_000, a.LocalMsat+b.LocalMsat, []contracts.ChannelObservation{a, b}
+
+	intent, abst := strategy().Evaluate(snap, target, []Channel{target, nb, all[2]})
+	if intent == nil {
+		t.Fatalf("abstained: %+v", abst)
+	}
+	if *intent.Target.SourceChanID != 5 || !strings.Contains(intent.Rationale.Summary, "from 0x0x5") {
+		t.Errorf("source = %v, summary %q; want the fullest channel", *intent.Target.SourceChanID, intent.Rationale.Summary)
+	}
+	if ids := intent.Target.ChanIDs; len(ids) != 2 || ids[0] != 1 || ids[1] != 6 {
+		t.Errorf("chan_ids = %v", ids)
+	}
+	if err := intent.Validate(); err != nil {
+		t.Errorf("intent does not validate: %v", err)
+	}
+}

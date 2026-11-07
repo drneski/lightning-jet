@@ -5,6 +5,10 @@
 // fee, at the low end of the forecast's range, is more than it would cost.
 // Otherwise it abstains, and says at what fee or what cost a refill would
 // pay. It proposes and never decides: authorization does that.
+//
+// It works per peer, like the fee strategy: a peer's channels are refilled as
+// one, since a refill comes back through whichever of them the peer forwards
+// it over, and are never the source of a refill of each other.
 package refill
 
 import (
@@ -20,7 +24,7 @@ import (
 // The strategy's identity, recorded on everything it proposes.
 const (
 	StrategyName    = "refill.value"
-	StrategyVersion = "0.2.0"
+	StrategyVersion = "0.3.0"
 )
 
 // Config is the strategy's settings.
@@ -55,12 +59,38 @@ type Strategy struct {
 	NewID func() string
 }
 
-// Channel is what the strategy knows of one channel in a cycle: what was
-// observed, and its outbound revenue and replacement cost estimates.
+// Channel is what the strategy knows of one peer's channels in a cycle: what
+// was observed, as one, and their outbound revenue and replacement cost
+// estimates. Channels are the peer's channels when it has several.
 type Channel struct {
-	Obs     contracts.ChannelObservation
-	Revenue *contracts.Estimate
-	Refill  *contracts.Estimate
+	Obs      contracts.ChannelObservation
+	Channels []contracts.ChannelObservation
+	Revenue  *contracts.Estimate
+	Refill   *contracts.Estimate
+}
+
+// ids are the peer's channels for a record's chan_ids: nil for one.
+func (c *Channel) ids() []contracts.ChanID {
+	if len(c.Channels) < 2 {
+		return nil
+	}
+	ids := make([]contracts.ChanID, len(c.Channels))
+	for i, o := range c.Channels {
+		ids[i] = o.ChanID
+	}
+	return ids
+}
+
+// fullest is the channel with the most on our side, which a refill leaves
+// through: a payment goes out through one channel.
+func (c *Channel) fullest() contracts.ChannelObservation {
+	best := c.Obs
+	for i, o := range c.Channels {
+		if i == 0 || o.LocalMsat > best.LocalMsat {
+			best = o
+		}
+	}
+	return best
 }
 
 var component = contracts.Component{Name: StrategyName, Version: StrategyVersion}
@@ -82,7 +112,7 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, target Channel, all []Chan
 	}
 	abstain := func(reason contracts.AbstentionReason, detail string, wouldChangeIf ...string) (*contracts.Intent, *contracts.Abstention) {
 		return nil, &contracts.Abstention{
-			ID: s.NewID(), Schema: contracts.SchemaAbstention, ChanID: obs.ChanID, Strategy: component, Action: contracts.ActionRebalance,
+			ID: s.NewID(), Schema: contracts.SchemaAbstention, ChanID: obs.ChanID, ChanIDs: target.ids(), Strategy: component, Action: contracts.ActionRebalance,
 			SnapshotID: snap.ID, EstimateIDs: ids, Reason: reason, Detail: detail,
 			WouldChangeIf: wouldChangeIf, RevisitAt: now.Add(s.Revisit), CreatedAt: now,
 		}
@@ -133,9 +163,10 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, target Channel, all []Chan
 	}
 
 	// Source: the neighbor, the cheapest way into the peer, when it has
-	// liquidity to spare; otherwise the channel with the most to spare. Either
-	// way it keeps TargetPct on our side, and doesn't route enough to be
-	// valued itself.
+	// liquidity to spare; otherwise the peer with the most to spare. Either
+	// way it keeps TargetPct on our side, its fullest channel can carry the
+	// whole amount, and it doesn't route enough to be valued itself. A
+	// channel to the target's own peer would only move sats between the two.
 	var neighbor string
 	if c := obs.Competition; c != nil && c.Neighbor != nil {
 		neighbor = c.Neighbor.Pubkey
@@ -146,7 +177,7 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, target Channel, all []Chan
 	for i := range all {
 		c := &all[i]
 		o := c.Obs
-		if o.ChanID == obs.ChanID || !o.Active || o.DataQuality.Level == contracts.DataInsufficient {
+		if o.Peer == obs.Peer || !o.Active || o.DataQuality.Level == contracts.DataInsufficient || c.fullest().LocalMsat < amount {
 			continue
 		}
 		if c.Revenue != nil && c.Revenue.EconomicConfidence.Level.AtLeast(s.MinConfidence) {
@@ -187,7 +218,7 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, target Channel, all []Chan
 	}
 	what := fmt.Sprintf("a refill of %s sats from %s would cost about %s sats (%d ppm, %s) and earn %s to %s sats over %d days at %d ppm, "+
 		"if forwards out keep their volume at that fee",
-		sats(amount), source.Obs.ChanID.SCID(), sats(cost), costPPM, how, sats(low), sats(expected), days, fee)
+		sats(amount), source.fullest().ChanID.SCID(), sats(cost), costPPM, how, sats(low), sats(expected), days, fee)
 	if low <= cost {
 		wouldChange := []string{}
 		if low > 0 {
@@ -200,11 +231,11 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, target Channel, all []Chan
 		return abstain(contracts.NoProfitableAction, what+": at the forecast's low end, less than it costs", wouldChange...)
 	}
 
-	src := source.Obs.ChanID
+	src := source.fullest().ChanID
 	maxFee := low
 	return &contracts.Intent{
 		ID: s.NewID(), Schema: contracts.SchemaIntent, Action: contracts.ActionRebalance,
-		Target:     contracts.Target{ChanID: obs.ChanID, SourceChanID: &src},
+		Target:     contracts.Target{ChanID: obs.ChanID, ChanIDs: target.ids(), SourceChanID: &src},
 		Parameters: contracts.IntentParameters{Rebalance: &contracts.RebalanceParameters{AmountMsat: amount}},
 		Limits:     contracts.IntentLimits{MaxFeeMsat: &maxFee},
 		Rationale: contracts.Rationale{EstimateIDs: ids, Summary: fmt.Sprintf(
