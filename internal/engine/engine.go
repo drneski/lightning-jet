@@ -1,7 +1,7 @@
 // Package engine runs Jet's decision cycle: observe the node, estimate each
-// channel, let the fee strategy propose or abstain for every channel and the
-// refill strategy for every depleted one, authorize every proposal, and
-// record the whole cycle at once.
+// peer's channels as one, let the fee strategy propose or abstain for every
+// peer and the refill strategy for every depleted one, authorize every
+// proposal, and record the whole cycle at once.
 package engine
 
 import (
@@ -104,15 +104,16 @@ func (e *Engine) Cycle(ctx context.Context) (Summary, error) {
 	}
 
 	var channels []refill.Channel
-	for _, ch := range snap.Channels {
-		est := e.Estimator.OutboundRevenue(snap, ch)
-		rc := e.Estimator.ReplacementCost(snap, ch)
+	for _, g := range peer.Groups(snap.Channels) {
+		est := e.Estimator.OutboundRevenue(snap, g.Combined)
+		rc := e.Estimator.ReplacementCost(snap, g.Combined)
+		est.ChanIDs, rc.ChanIDs = g.IDs(), g.IDs()
 		cycle.Estimates = append(cycle.Estimates, est, rc)
-		channels = append(channels, refill.Channel{Obs: ch, Revenue: est, Refill: rc})
+		channels = append(channels, refill.Channel{Obs: g.Combined, Channels: g.Channels, Revenue: est, Refill: rc})
 		if e.Strategy == nil {
 			continue
 		}
-		intent, abst := e.Strategy.Evaluate(snap, peer.New(ch), est, rc)
+		intent, abst := e.Strategy.Evaluate(snap, g, est, rc)
 		if abst != nil {
 			cycle.Abstentions = append(cycle.Abstentions, abst)
 			sum.Abstentions++

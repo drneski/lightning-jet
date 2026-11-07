@@ -274,3 +274,38 @@ func TestADepletedChannelIsEvaluatedForARefill(t *testing.T) {
 		t.Errorf("status = %+v, refills %+v", status, status.Refills)
 	}
 }
+
+// A second channel to a peer joins the first: one evaluation of the two, on
+// their combined balance, recorded under the older channel with both listed.
+func TestAPeersChannelsAreEvaluatedAsOne(t *testing.T) {
+	c := &clock{time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)}
+	f := fakeNode(c.t)
+	second := contracts.ChanID(850000<<40 | 1)
+	f.Channels = append(f.Channels, lnd.Channel{ChanID: second, RemotePubkey: peers[fullBusy], Active: true,
+		CapacitySat: 5_000_000, LocalSat: 500_000, RemoteSat: 4_490_000})
+	f.Edges[second] = lnd.Edge{ChanID: second, Node1Pub: us, Node2Pub: peers[fullBusy],
+		Node1Policy: &lnd.RoutingPolicy{FeeRateMilliMsat: 500}, Node2Policy: &lnd.RoutingPolicy{FeeRateMilliMsat: 400}}
+	e, st := newEngine(t, f, c)
+	ctx := context.Background()
+	sum, err := e.Cycle(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 5.1M of 10M sats between them is inside the band.
+	if sum.Channels != 4 || sum.Intents != 0 || sum.Abstentions != 3 {
+		t.Fatalf("summary = %+v", sum)
+	}
+	ev, err := st.LatestEvaluation(ctx, fullBusy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := ev.Abstention
+	if a == nil || !strings.Contains(a.Detail, "local balance 51% is inside") || len(a.ChanIDs) != 2 || a.ChanIDs[1] != second {
+		t.Fatalf("abstention = %+v", a)
+	}
+	for _, est := range ev.Estimates {
+		if len(est.ChanIDs) != 2 {
+			t.Errorf("estimate %s covers %v", est.Kind, est.ChanIDs)
+		}
+	}
+}

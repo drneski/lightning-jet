@@ -61,16 +61,19 @@ func TestRun(t *testing.T) {
 	}
 }
 
-const (
-	us   = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	peer = "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-)
+const us = "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// Synthetic channels, funded long before the forwards window.
+// Synthetic channels, funded long before the forwards window, each to its
+// own peer.
 var (
 	fullBusy  = fmt.Sprint(uint64(800000)<<40 | 1)
 	balanced  = fmt.Sprint(uint64(800000)<<40 | 2)
 	fullQuiet = fmt.Sprint(uint64(800000)<<40 | 3)
+	peers     = map[string]string{
+		fullBusy:  "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		balanced:  "03cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		fullQuiet: "03dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+	}
 )
 
 // fakeLND serves a synthetic node over LND's REST API.
@@ -100,7 +103,7 @@ func fakeLND(t *testing.T) (address, cert, macaroon string) {
 			fmt.Fprintf(w, `{"identity_pubkey":%q,"block_height":900000,"synced_to_chain":true,"synced_to_graph":true}`, us)
 		case r.URL.Path == "/v1/channels":
 			ch := func(id, local, remote string) string {
-				return fmt.Sprintf(`{"active":true,"remote_pubkey":%q,"chan_id":%q,"capacity":"5000000","local_balance":%q,"remote_balance":%q}`, peer, id, local, remote)
+				return fmt.Sprintf(`{"active":true,"remote_pubkey":%q,"chan_id":%q,"capacity":"5000000","local_balance":%q,"remote_balance":%q}`, peers[id], id, local, remote)
 			}
 			fmt.Fprintf(w, `{"channels":[%s,%s,%s]}`, ch(fullBusy, "4600000", "390000"), ch(balanced, "2500000", "2490000"), ch(fullQuiet, "4500000", "490000"))
 		case strings.HasPrefix(r.URL.Path, "/v1/graph/edge/"):
@@ -108,7 +111,7 @@ func fakeLND(t *testing.T) (address, cert, macaroon string) {
 			p := func(ppm int) string {
 				return fmt.Sprintf(`{"time_lock_delta":80,"fee_base_msat":"0","fee_rate_milli_msat":"%d"}`, ppm)
 			}
-			fmt.Fprintf(w, `{"channel_id":%q,"node1_pub":%q,"node2_pub":%q,"node1_policy":%s,"node2_policy":%s}`, id, us, peer, p(500), p(400))
+			fmt.Fprintf(w, `{"channel_id":%q,"node1_pub":%q,"node2_pub":%q,"node1_policy":%s,"node2_policy":%s}`, id, us, peers[id], p(500), p(400))
 		case r.URL.Path == "/v1/switch":
 			var events []string
 			add := func(out string, n int) {
