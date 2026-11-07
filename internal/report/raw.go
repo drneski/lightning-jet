@@ -14,6 +14,7 @@ var rawColumns = []string{
 	"failed_forwards", "failed_msat", "coverage_hours",
 	"expected_msat", "low_msat", "high_msat", "interval", "horizon_hours", "confidence",
 	"competing_channels", "competing_p25_ppm", "competing_median_ppm", "competing_p75_ppm",
+	"refill_expected_ppm", "refill_low_ppm", "refill_high_ppm",
 	"result", "blocked", "mode", "prior_approvals_24h",
 }
 
@@ -44,6 +45,11 @@ func (r *Report) Raw() string {
 			add(strconv.Itoa(cp.Channels), strconv.FormatInt(cp.FeePPMP25, 10), strconv.FormatInt(cp.FeePPMMedian, 10), strconv.FormatInt(cp.FeePPMP75, 10))
 		} else {
 			add("", "", "", "")
+		}
+		if rf := c.Refill; rf != nil {
+			add(strconv.FormatInt(rf.ExpectedPPM, 10), strconv.FormatInt(rf.LowPPM, 10), strconv.FormatInt(rf.HighPPM, 10))
+		} else {
+			add("", "", "")
 		}
 		add(c.Result, strings.Join(c.Blocked, ","))
 		if c.Proposal != nil {

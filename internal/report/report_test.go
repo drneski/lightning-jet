@@ -12,6 +12,8 @@ import (
 
 func mp(m contracts.MilliSat) *contracts.MilliSat { return &m }
 
+func ip(v int64) *int64 { return &v }
+
 // A synthetic node: a busy channel that earned 3,650 sats in 30 days on 10M
 // sats of capacity, and a quiet one with no forecast.
 func TestBuild(t *testing.T) {
@@ -36,6 +38,9 @@ func TestBuild(t *testing.T) {
 		{ChanID: contracts.ChanID(uint64(800000)<<40 | 7<<16 | 1), Kind: economics.KindOutboundRevenue, HorizonHours: 336, ExpectedMsat: mp(1_400_000), LowMsat: mp(500_000), HighMsat: mp(2_900_000),
 			Interval: "p10-p90", EconomicConfidence: contracts.EconomicConfidence{Level: contracts.ConfidenceMedium}},
 		{ChanID: 2, Kind: economics.KindOutboundRevenue, HorizonHours: 336},
+		{ChanID: busyID, Kind: economics.KindReplacementCost, HorizonHours: 336, LowPPM: ip(600), ExpectedPPM: ip(605), HighPPM: ip(1000),
+			Interval: "advertised fees", EconomicConfidence: contracts.EconomicConfidence{Level: contracts.ConfidenceLow}},
+		{ChanID: 2, Kind: economics.KindReplacementCost, HorizonHours: 336},
 	}
 	status := &store.Status{PerChannel: []store.ChannelStatus{
 		{ChanID: contracts.ChanID(uint64(800000)<<40 | 7<<16 | 1), Proposal: &contracts.FeeParameters{ObservedFeePPM: 400, FeePPM: 440},
@@ -53,6 +58,9 @@ func TestBuild(t *testing.T) {
 	if y := r.Channels[0].YieldPct; y < 0.443 || y > 0.445 {
 		t.Errorf("yield = %v", y)
 	}
+	if r.Channels[0].Refill == nil || r.Channels[0].Refill.LowPPM != 600 || r.Channels[1].Refill != nil {
+		t.Errorf("refills = %+v, %+v", r.Channels[0].Refill, r.Channels[1].Refill)
+	}
 	if r.Channels[1].Forecast != nil || r.Channels[1].FeePPM != nil {
 		t.Errorf("quiet channel = %+v", r.Channels[1])
 	}
@@ -64,8 +72,9 @@ func TestBuild(t *testing.T) {
 		"3,650 sats in fees from 20 forwards (9M sats routed): 0.37% a year on capacity.",
 		"8 forwards failed for lack of balance on our side, 1.2M sats in all.",
 		"1,400 sats expected, from the one channel with enough history to forecast.",
-		"Big[31m Peer   800000x7x1  ░░░░░░░░░░   1%           9M / 0      400     500   3,650       8     1,400  would raise to 440 ppm; already approved twice in shadow in the last 24h",
-		"03bbbbbbbbbb…  0x0x2       ██████████  98%           0 / 8M        -       -       0       0         -  inactive; too few forwards to judge",
+		"Big[31m Peer   800000x7x1  ░░░░░░░░░░   1%           9M / 0      400     500     605   3,650       8     1,400  would raise to 440 ppm; already approved twice in shadow in the last 24h",
+		"03bbbbbbbbbb…  0x0x2       ██████████  98%           0 / 8M        -       -       -       0       0         -  inactive; too few forwards to judge",
+		"Refilling Big[31m Peer costs at least 600 ppm, its own fee to forward to us,\n  but we charge 400 ppm on it: no refill can pay at this fee.",
 		"03bbbbbbbbbb… → Big[31m Peer        19      8M   3,250    89%",
 		"0x0x99 → Big[31m Peer                1      1M     400    10%",
 		"03bbbbbbbbbb… brings in the forwards behind 89% of the fees, but has only\n  40,000 sats on its side (2%), so little more can come in through it.",
@@ -88,7 +97,7 @@ func TestBuild(t *testing.T) {
 	}
 
 	raw := strings.Split(r.Raw(), "\n")
-	if !strings.Contains(raw[0], "\tlocal_msat\tremote_msat\t") || !strings.HasPrefix(raw[0], "chan_id\tscid\tpeer\tpeer_alias") || len(strings.Split(raw[1], "\t")) != len(rawColumns) {
+	if !strings.Contains(raw[0], "\tlocal_msat\tremote_msat\t") || !strings.Contains(raw[1], "\t605\t600\t1000\t") || !strings.HasPrefix(raw[0], "chan_id\tscid\tpeer\tpeer_alias") || len(strings.Split(raw[1], "\t")) != len(rawColumns) {
 		t.Errorf("raw = %q", raw[:2])
 	}
 	if !strings.Contains(raw[1], "\t3650000\t") || !strings.HasSuffix(raw[1], "\tcooldown,daily_changes\tshadow\t2") {

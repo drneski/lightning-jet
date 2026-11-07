@@ -60,6 +60,7 @@ type Channel struct {
 	Failures    *contracts.Failures    `json:"failures,omitempty"`
 	Competition *contracts.Competition `json:"competition,omitempty"`
 	Forecast    *Forecast              `json:"forecast,omitempty"`
+	Refill      *Refill                `json:"refill,omitempty"`
 	// Result is the cycle's decision in jet status's words. Abstained, or
 	// Proposal with its Verdict and the rules it failed, say the same in parts.
 	Result    string                     `json:"result"`
@@ -81,6 +82,16 @@ type Forecast struct {
 	HighMsat     contracts.MilliSat        `json:"high_msat"`
 	Interval     string                    `json:"interval"`
 	Confidence   contracts.ConfidenceLevel `json:"confidence"`
+}
+
+// Refill is the estimator's replacement cost for a channel: what putting
+// liquidity back on our side costs, in ppm of the amount moved.
+type Refill struct {
+	ExpectedPPM int64                     `json:"expected_ppm"`
+	LowPPM      int64                     `json:"low_ppm"`
+	HighPPM     int64                     `json:"high_ppm"`
+	Interval    string                    `json:"interval"`
+	Confidence  contracts.ConfidenceLevel `json:"confidence"`
 }
 
 // Totals add up the channels. Forecasts are summed only over the channels
@@ -110,8 +121,13 @@ func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *st
 		results[c.ChanID] = c
 	}
 	forecasts := map[contracts.ChanID]*Forecast{}
+	refills := map[contracts.ChanID]*Refill{}
 	var horizon int64
 	for _, e := range estimates {
+		if e.Kind == economics.KindReplacementCost && e.ExpectedPPM != nil && e.LowPPM != nil && e.HighPPM != nil {
+			refills[e.ChanID] = &Refill{ExpectedPPM: *e.ExpectedPPM, LowPPM: *e.LowPPM, HighPPM: *e.HighPPM,
+				Interval: e.Interval, Confidence: e.EconomicConfidence.Level}
+		}
 		if e.Kind != economics.KindOutboundRevenue {
 			continue
 		}
@@ -131,7 +147,7 @@ func Build(snap *contracts.Snapshot, estimates []*contracts.Estimate, status *st
 		ch := Channel{ChanID: c.ChanID, SCID: c.ChanID.SCID(), Peer: c.Peer, PeerAlias: c.PeerAlias, Active: c.Active,
 			CapacityMsat: c.CapacityMsat, LocalMsat: c.LocalMsat, RemoteMsat: c.RemoteMsat, Forwards: c.Forwards,
 			YieldPct: yield(c.Forwards.OutFeeMsat, c.CapacityMsat, c.Forwards.WindowHours),
-			Failures: c.Failures, Competition: c.Competition, Forecast: forecasts[c.ChanID],
+			Failures: c.Failures, Competition: c.Competition, Forecast: forecasts[c.ChanID], Refill: refills[c.ChanID],
 			Result: res.Result(), Abstained: res.Abstained, Proposal: res.Proposal, Verdict: res.Verdict, Blocked: res.Blocked,
 			Mode: res.Mode, PriorApprovals: res.PriorApprovals}
 		if c.OurPolicy != nil {

@@ -67,7 +67,9 @@ func (r *Report) Text() string {
 
 	b.WriteString("\n" + wrap(fmt.Sprintf("Routed out / in is the sats forwarded out through the channel and in through it. "+
 		"Out fee is what we charge to forward out through the channel. Others is the "+
-		"median out fee of the other channels into the same peer: a prior, not a price. Both are in ppm. Earned and "+
+		"median out fee of the other channels into the same peer: a prior, not a price. Refill is what putting sats back "+
+		"on our side would cost: the peer's fee to us plus the cheapest way into the peer, from advertised fees. All "+
+		"three are in ppm. Earned and "+
 		"Missed cover the %d days, and Next %dd is the forecast. Amounts are in sats.", days, t.HorizonHours/24), "", 80))
 	b.WriteString(wrap("Shadow mode: Jet changed nothing. A change it approves isn't applied, so it proposes the "+
 		"change again, and the limits count each approval as if it had been.", "", 80))
@@ -96,12 +98,15 @@ func byEarnings(in []Channel) []Channel {
 const nameWidth = 18
 
 func table(b *strings.Builder, chans []Channel, horizonDays int64) {
-	heads := []string{"Peer", "Channel", "Our side", "Routed out / in", "Out fee", "Others", "Earned", "Missed",
+	heads := []string{"Peer", "Channel", "Our side", "Routed out / in", "Out fee", "Others", "Refill", "Earned", "Missed",
 		fmt.Sprintf("Next %dd", horizonDays), "Jet"}
-	right := []bool{false, false, false, true, true, true, true, true, true, false}
+	right := []bool{false, false, false, true, true, true, true, true, true, true, false}
 	rows := [][]string{}
 	for _, c := range chans {
-		fee, others, missed, next := "-", "-", "-", "-"
+		fee, others, refill, missed, next := "-", "-", "-", "-", "-"
+		if c.Refill != nil {
+			refill = strconv.FormatInt(c.Refill.ExpectedPPM, 10)
+		}
 		if c.FeePPM != nil {
 			fee = strconv.FormatInt(*c.FeePPM, 10)
 		}
@@ -117,7 +122,7 @@ func table(b *strings.Builder, chans []Channel, horizonDays int64) {
 		p := pct(c.LocalMsat, c.CapacityMsat)
 		rows = append(rows, []string{truncate(name(c), nameWidth), c.SCID, fmt.Sprintf("%s %3d%%", bar(p), p),
 			sats(c.Forwards.OutAmountMsat) + " / " + sats(c.Forwards.InAmountMsat),
-			fee, others, sats(c.Forwards.OutFeeMsat), missed, next, decision(c)})
+			fee, others, refill, sats(c.Forwards.OutFeeMsat), missed, next, decision(c)})
 	}
 	columns(b, heads, right, rows)
 }
@@ -289,6 +294,16 @@ func worthALook(chans []Channel, routes []Route, byID map[contracts.ChanID]Chann
 			}
 		}
 		notes = append(notes, n)
+	}
+
+	// A draining channel priced below the least a refill costs: liquidity it
+	// sells can't be bought back at a profit.
+	for _, c := range chans {
+		if c.Refill == nil || c.FeePPM == nil || *c.FeePPM >= c.Refill.LowPPM || c.Forwards.OutCount == 0 || pct(c.LocalMsat, c.CapacityMsat) > 20 {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("Refilling %s costs at least %d ppm, its own fee to forward to us, but we charge %d ppm on it: no refill can pay at this fee.",
+			name(c), c.Refill.LowPPM, *c.FeePPM))
 	}
 
 	// A channel that brings in much of what the node earns, with little left
