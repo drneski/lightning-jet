@@ -389,6 +389,15 @@ func cmdExplain(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	if err != nil {
 		return err
 	}
+	switch refill, err := st.RefillEvaluation(ctx, chanID, ev.Snapshot.ID); {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return err
+	default:
+		if err := x.AddRefill(refill); err != nil {
+			return err
+		}
+	}
 	if *asJSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")

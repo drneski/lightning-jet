@@ -58,7 +58,8 @@ jet run
 
 Then:
 - `jet status` summarizes the latest cycle and what is being recorded;
-- `jet explain <channel id>` explains a channel's latest decision;
+- `jet explain <channel id>` explains a channel's latest fee decision, and the
+  refill decision from the same cycle;
 - `jet report` shows each channel's economics, by peer name: the sats routed
   out and in, fees earned and their yield on capacity, forwards that failed for
   lack of balance, the forecast, what competing channels charge, what a refill
