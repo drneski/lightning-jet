@@ -16,6 +16,8 @@ const peerKey = "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
 func mp(m contracts.MilliSat) *contracts.MilliSat { return &m }
 
+func ip(v int64) *int64 { return &v }
+
 func snapshot() *contracts.Snapshot {
 	s := &contracts.Snapshot{ID: "01a17581-b830-7c3b-98d2-e6a4b5c6d7e8", Schema: contracts.SchemaSnapshot, NodePubkey: "02aa", TakenAt: at,
 		Channels: []contracts.ChannelObservation{{
@@ -298,5 +300,22 @@ func TestAPeersChannelsAreExplainedTogether(t *testing.T) {
 	ev.Abstention.ChanIDs[1] = 333
 	if _, err := Build(ev); err == nil {
 		t.Error("a channel missing from the snapshot was explained")
+	}
+}
+
+// Measured refill evidence is shown under its estimate, apart from priors.
+func TestMeasuredRefillsAreShown(t *testing.T) {
+	ev := abstentionEvaluation()
+	ev.Estimates = append(ev.Estimates, &contracts.Estimate{Kind: "replacement_cost", HorizonHours: 336,
+		LowPPM: ip(400), ExpectedPPM: ip(1500), HighPPM: ip(1500), Interval: "advertised fees and refill attempts",
+		EconomicConfidence: contracts.EconomicConfidence{Level: contracts.ConfidenceLow, Basis: "raised by 1 refill attempt"},
+		Evidence: []contracts.Evidence{{Kind: "refill_attempts_dry", Count: 1, Source: "lnd.listpayments",
+			Summary: "1 attempted refill ran out of liquidity past our channel, at 1500 ppm"}}})
+	x, err := Build(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Measured: 1 attempted refill ran out of liquidity past our channel, at 1500 ppm."; !strings.Contains(x.Text(), want) {
+		t.Errorf("text lacks %q:\n%s", want, x.Text())
 	}
 }

@@ -209,9 +209,13 @@ func (x *Explanation) Text() string {
 		}
 		more("Economic confidence: %s (%s).", e.EconomicConfidence.Level, e.EconomicConfidence.Basis)
 		for _, ev := range e.Evidence {
-			if ev.Prior && !shown[ev.Summary] {
+			switch {
+			case ev.Prior && !shown[ev.Summary]:
 				shown[ev.Summary] = true
 				more("Prior: %s (a prior, not a price).", ev.Summary)
+			case ev.Source == "lnd.listpayments":
+				// Refills aren't among the observations above.
+				more("Measured: %s.", ev.Summary)
 			}
 		}
 	}
