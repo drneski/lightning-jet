@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -166,10 +167,14 @@ func (s *Snapshot) Seal() error {
 // should be believed. What the value fields mean depends on Kind. A rate,
 // such as a replacement_cost, is stated in ExpectedPPM, LowPPM and HighPPM, in
 // parts per million of the amount moved, in place of the amounts.
+//
+// When the peer has several channels to us, Jet estimates them as one, and
+// ChanIDs lists them all, ChanID first: see Group.
 type Estimate struct {
 	ID                 string             `json:"id"`
 	Schema             string             `json:"schema"`
 	ChanID             ChanID             `json:"chan_id"`
+	ChanIDs            []ChanID           `json:"chan_ids,omitempty"`
 	Kind               string             `json:"kind"`
 	SnapshotID         string             `json:"snapshot_id"`
 	Estimator          Component          `json:"estimator"`
@@ -224,9 +229,25 @@ type Intent struct {
 }
 
 // Target is the channel an intent acts on, and for a rebalance its source.
+// When the peer has several channels to us, ChanIDs lists them all, ChanID
+// first, and the intent acts on them as one: a fee update applies to each of
+// them, and a refill comes back through whichever the peer forwards it over.
 type Target struct {
-	ChanID       ChanID  `json:"chan_id"`
-	SourceChanID *ChanID `json:"source_chan_id,omitempty"`
+	ChanID       ChanID   `json:"chan_id"`
+	ChanIDs      []ChanID `json:"chan_ids,omitempty"`
+	SourceChanID *ChanID  `json:"source_chan_id,omitempty"`
+}
+
+// Channels returns the channels the intent acts on.
+func (t Target) Channels() []ChanID { return Group(t.ChanID, t.ChanIDs) }
+
+// Group returns the channels a record covers: ids when it lists them, which
+// happens when the peer has several, and otherwise the one channel.
+func Group(id ChanID, ids []ChanID) []ChanID {
+	if len(ids) > 0 {
+		return ids
+	}
+	return []ChanID{id}
 }
 
 // IntentParameters holds one action's parameters.
@@ -272,11 +293,13 @@ const (
 
 // Abstention is a recorded decision to do nothing, with the reason. Action is
 // what the strategy declined to propose; records from before refills have
-// none, and are all fee updates.
+// none, and are all fee updates. ChanIDs lists the peer's channels when it
+// has several, ChanID first: see Group.
 type Abstention struct {
 	ID            string           `json:"id"`
 	Schema        string           `json:"schema"`
 	ChanID        ChanID           `json:"chan_id"`
+	ChanIDs       []ChanID         `json:"chan_ids,omitempty"`
 	Strategy      Component        `json:"strategy"`
 	Action        Action           `json:"action,omitempty"`
 	SnapshotID    string           `json:"snapshot_id"`
@@ -371,6 +394,7 @@ func (e *Estimate) Validate() error {
 	req(&errs, e.Estimator.Name != "" && e.Estimator.Version != "", "estimate: missing estimator name or version")
 	req(&errs, e.HorizonHours > 0, "estimate: horizon must be positive")
 	req(&errs, e.EconomicConfidence.Level != "", "estimate: missing economic confidence")
+	groupValid(&errs, "estimate", e.ChanID, e.ChanIDs)
 	req(&errs, e.DataQuality.Level != "", "estimate: missing data quality")
 	amounts := e.ExpectedMsat != nil || e.LowMsat != nil || e.HighMsat != nil
 	rate := e.ExpectedPPM != nil || e.LowPPM != nil || e.HighPPM != nil
@@ -404,6 +428,7 @@ func (i *Intent) Validate() error {
 	req(&errs, len(i.Rationale.EstimateIDs) > 0 && i.Rationale.Summary != "", "intent: rationale needs estimates and a summary")
 	req(&errs, i.Mode == ModeShadow || i.Mode == ModeLive, "intent: mode must be shadow or live")
 	req(&errs, i.ExpiresAt.After(i.CreatedAt), "intent: must expire after it is created")
+	groupValid(&errs, "intent", i.Target.ChanID, i.Target.ChanIDs)
 	switch i.Action {
 	case ActionFeeUpdate:
 		req(&errs, i.Parameters.Fee != nil, "intent: fee_update needs fee parameters")
@@ -413,7 +438,7 @@ func (i *Intent) Validate() error {
 	case ActionRebalance:
 		r, src := i.Parameters.Rebalance, i.Target.SourceChanID
 		req(&errs, r != nil && r.AmountMsat > 0, "intent: rebalance needs a positive amount")
-		req(&errs, src != nil && *src != i.Target.ChanID, "intent: rebalance needs a source channel other than its target")
+		req(&errs, src != nil && !slices.Contains(i.Target.Channels(), *src), "intent: rebalance needs a source channel other than its target")
 		req(&errs, i.Limits.MaxFeeMsat != nil && *i.Limits.MaxFeeMsat >= 0, "intent: rebalance needs a maximum fee")
 	default:
 		errs = append(errs, fmt.Errorf("intent: unsupported action %q", i.Action))
@@ -428,6 +453,7 @@ func (a *Abstention) Validate() error {
 	req(&errs, a.Schema == SchemaAbstention, "abstention: schema must be "+SchemaAbstention)
 	req(&errs, a.SnapshotID != "", "abstention: missing snapshot id")
 	req(&errs, a.Strategy.Name != "" && a.Strategy.Version != "", "abstention: missing strategy name or version")
+	groupValid(&errs, "abstention", a.ChanID, a.ChanIDs)
 	req(&errs, a.Action == "" || a.Action == ActionFeeUpdate || a.Action == ActionRebalance,
 		fmt.Sprintf("abstention: unknown action %q", a.Action))
 	switch a.Reason {
@@ -473,6 +499,19 @@ func (o *Outcome) Validate() error {
 		errs = append(errs, fmt.Errorf("outcome: unknown state %q", o.State))
 	}
 	return errors.Join(errs...)
+}
+
+// groupValid checks a record's list of a peer's channels: absent, or at
+// least two, in id order without repeats, the record's channel first.
+func groupValid(errs *[]error, what string, id ChanID, ids []ChanID) {
+	if len(ids) == 0 {
+		return
+	}
+	ordered := len(ids) >= 2 && ids[0] == id
+	for k := 1; ordered && k < len(ids); k++ {
+		ordered = ids[k-1] < ids[k]
+	}
+	req(errs, ordered, what+": chan_ids must list at least two channels in id order, chan_id first")
 }
 
 func req(errs *[]error, ok bool, msg string) {

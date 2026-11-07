@@ -53,6 +53,16 @@ execution.
 - **Channels** are identified by their short channel id, a 64-bit integer written
   as a decimal string in JSON (`"chan_id": "…"`), because it exceeds the range
   some JSON readers handle exactly. Peers are 33-byte public keys in hex.
+- **A peer's channels are one.** LND forwards a payment over any channel to the
+  peer that can carry it and whose policy the payment satisfies, and LND
+  senders plan with the highest fee and time lock among a peer's channels. So
+  Jet estimates and decides about a peer's channels together, and a record
+  about them lists them all in `chan_ids`, in id order, with `chan_id` the
+  first, the oldest. A record about a peer with one channel has no `chan_ids`.
+  The channels are combined from the snapshot: balances, forwards and failures
+  add up, our policy is the enabled one with the highest fee, the peer's the
+  enabled one with the lowest (the cheapest way back in for a refill), and data
+  quality is the worst of theirs, each issue naming its channel.
 - **Time** is UTC. JSON uses RFC 3339 at millisecond precision, with a zero
   fraction left out (`2026-10-26T00:00:00Z`). Durations are whole
   hours (`_hours`).
@@ -126,7 +136,7 @@ believed.
 | Field | Meaning |
 |---|---|
 | `id`, `schema` | `jet.estimate/1` |
-| `chan_id` | The channel |
+| `chan_id`, `chan_ids` | The channel, or the peer's channels together |
 | `kind` | What is estimated, such as `outbound_liquidity_value` or `replacement_cost` |
 | `snapshot_id` | The inputs used |
 | `estimator` | Name and version |
@@ -153,7 +163,7 @@ A proposed action, specific enough to authorize, execute and audit.
 |---|---|
 | `id`, `schema` | `jet.intent/1` |
 | `action` | `fee_update` or `rebalance` (more later) |
-| `target` | The channel acted on; for `rebalance`, also the source channel |
+| `target` | The channel acted on (`chan_id`), or the peer's channels (`chan_ids` too); for `rebalance`, also the source channel (`source_chan_id`), which is never one of the target's. A fee update applies to every channel listed; a refill comes back through whichever of them the peer forwards it over. |
 | `parameters` | Per action. `fee_update` has `fee`: `base_msat` and `fee_ppm`, with the `observed_base_msat` and `observed_fee_ppm` they replace. `rebalance` has `rebalance`: the `amount_msat` to move, out through the source channel and back through the target. |
 | `limits` | The bounds execution must stay inside. `rebalance`: maximum fee (`max_fee_msat`), and later a time limit, which the payment execution specification will define. `fee_update`: none beyond the parameters. |
 | `rationale` | The estimate ids it rests on, and a one-line summary generated from them |
@@ -172,7 +182,7 @@ A recorded decision to do nothing, with the reason.
 | Field | Meaning |
 |---|---|
 | `id`, `schema` | `jet.abstention/1` |
-| `chan_id` | The channel |
+| `chan_id`, `chan_ids` | The channel, or the peer's channels together |
 | `action` | What the strategy declined to propose: `fee_update` or `rebalance`. Records from before refills have none, and are all fee updates. |
 | `strategy` | Name and version |
 | `snapshot_id`, `estimate_ids` | What it saw |

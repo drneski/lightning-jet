@@ -162,6 +162,7 @@ func TestRebalanceIntentValidate(t *testing.T) {
 		"no amount":     func(i *Intent) { i.Parameters.Rebalance.AmountMsat = 0 },
 		"no source":     func(i *Intent) { i.Target.SourceChanID = nil },
 		"to itself":     func(i *Intent) { same := i.Target.ChanID; i.Target.SourceChanID = &same },
+		"to its peer":   func(i *Intent) { i.Target.ChanIDs = []ChanID{i.Target.ChanID, 2} },
 		"no fee limit":  func(i *Intent) { i.Limits.MaxFeeMsat = nil },
 		"no parameters": func(i *Intent) { i.Parameters.Rebalance = nil },
 	} {
@@ -207,6 +208,34 @@ func TestAbstentionValidate(t *testing.T) {
 	a.Reason = "bored"
 	if err := a.Validate(); err == nil {
 		t.Error("an abstention with an unknown reason validated")
+	}
+}
+
+// A record that covers a peer's channels lists at least two, in id order,
+// its own channel first.
+func TestChanIDsValidate(t *testing.T) {
+	for ids, ok := range map[string]bool{"": true, "1,2": true, "1,2,3": true, "1": false, "2,1": false, "1,1": false, "3,1,2": false} {
+		var list []ChanID
+		for _, f := range strings.Split(ids, ",") {
+			if f != "" {
+				id, _ := ParseChanID(f)
+				list = append(list, id)
+			}
+		}
+		i := validIntent()
+		i.Target.ChanID = 1
+		if len(list) > 0 {
+			i.Target.ChanID = list[0]
+		}
+		i.Target.ChanIDs = list
+		e := validEstimate()
+		e.ChanID, e.ChanIDs = i.Target.ChanID, list
+		if got := i.Validate() == nil && e.Validate() == nil; got != ok {
+			t.Errorf("chan_ids %q: valid = %v, want %v", ids, got, ok)
+		}
+	}
+	if got := (Target{ChanID: 7}).Channels(); len(got) != 1 || got[0] != 7 {
+		t.Errorf("one channel's target covers %v", got)
 	}
 }
 
