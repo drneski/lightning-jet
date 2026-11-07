@@ -29,8 +29,9 @@ type Config struct {
 	DataDir  string
 	Interval time.Duration
 
-	FeesMode contracts.Mode
-	Limits   limits.Config
+	FeesMode      contracts.Mode
+	RebalanceMode contracts.Mode
+	Limits        limits.Config
 
 	WindowDays         int
 	GossipRefreshHours int
@@ -41,9 +42,9 @@ func Default() Config {
 	return Config{
 		RESTAddress: "localhost:8080",
 		Interval:    time.Hour,
-		FeesMode:    contracts.ModeShadow,
-		Limits:      limits.DefaultConfig,
-		WindowDays:  30, GossipRefreshHours: 24,
+		FeesMode:    contracts.ModeShadow, RebalanceMode: contracts.ModeShadow,
+		Limits:     limits.DefaultConfig,
+		WindowDays: 30, GossipRefreshHours: 24,
 	}
 }
 
@@ -137,12 +138,18 @@ var setters = map[string]map[string]func(*Config, string) error{
 	"fees": {
 		"mode": func(c *Config, v string) error { c.FeesMode = contracts.Mode(v); return nil },
 	},
+	"rebalance": {
+		"mode": func(c *Config, v string) error { c.RebalanceMode = contracts.Mode(v); return nil },
+	},
 	"limits": {
-		"fee_ppm_min":             intTo(func(c *Config, v int64) { c.Limits.FeePPMMin = v }),
-		"fee_ppm_max":             intTo(func(c *Config, v int64) { c.Limits.FeePPMMax = v }),
-		"max_step_pct":            intTo(func(c *Config, v int64) { c.Limits.MaxStepPct = v }),
-		"cooldown_hours":          intTo(func(c *Config, v int64) { c.Limits.CooldownHours = v }),
-		"max_fee_changes_per_day": intTo(func(c *Config, v int64) { c.Limits.MaxFeeChangesPerDay = int(v) }),
+		"fee_ppm_min":              intTo(func(c *Config, v int64) { c.Limits.FeePPMMin = v }),
+		"fee_ppm_max":              intTo(func(c *Config, v int64) { c.Limits.FeePPMMax = v }),
+		"max_step_pct":             intTo(func(c *Config, v int64) { c.Limits.MaxStepPct = v }),
+		"cooldown_hours":           intTo(func(c *Config, v int64) { c.Limits.CooldownHours = v }),
+		"max_fee_changes_per_day":  intTo(func(c *Config, v int64) { c.Limits.MaxFeeChangesPerDay = int(v) }),
+		"rebalance_ppm_max":        intTo(func(c *Config, v int64) { c.Limits.RebalancePPMMax = v }),
+		"rebalance_sats_per_day":   intTo(func(c *Config, v int64) { c.Limits.RebalanceSatsPerDay = v }),
+		"rebalance_cooldown_hours": intTo(func(c *Config, v int64) { c.Limits.RebalanceCooldownHours = v }),
 		"freeze": func(c *Config, v string) error {
 			id, err := contracts.ParseChanID(v)
 			if err == nil {
@@ -184,6 +191,13 @@ func (c Config) Validate() error {
 		errs = append(errs, ErrLive)
 	default:
 		errs = append(errs, fmt.Errorf("fees mode must be shadow or off, not %q", c.FeesMode))
+	}
+	switch c.RebalanceMode {
+	case contracts.ModeShadow, contracts.ModeOff:
+	case contracts.ModeLive:
+		errs = append(errs, errors.New("rebalance mode live needs an executor, which this version of Jet does not have; use shadow"))
+	default:
+		errs = append(errs, fmt.Errorf("rebalance mode must be shadow or off, not %q", c.RebalanceMode))
 	}
 	if c.Interval < time.Minute {
 		errs = append(errs, fmt.Errorf("interval %s is under a minute", c.Interval))

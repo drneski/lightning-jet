@@ -197,7 +197,7 @@ func cmdRun(ctx context.Context, args []string, stderr io.Writer) error {
 	gen := ids.New()
 	now := time.Now
 	lim := cfg.Limits
-	lim.FeesMode = cfg.FeesMode
+	lim.FeesMode, lim.RebalanceMode = cfg.FeesMode, cfg.RebalanceMode
 	strat := fee.DefaultConfig
 	strat.Revisit = cfg.Interval
 	// The strategy proposes no step the limits would refuse.

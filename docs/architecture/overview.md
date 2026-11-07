@@ -391,12 +391,19 @@ interval = 1h
 # shadow or off
 mode = shadow
 
+[rebalance]
+# shadow or off
+mode = shadow
+
 [limits]
 fee_ppm_min = 1
 fee_ppm_max = 3000
 max_step_pct = 15
 cooldown_hours = 12
 max_fee_changes_per_day = 2
+rebalance_ppm_max = 1000
+rebalance_sats_per_day = 1000
+rebalance_cooldown_hours = 12
 # Repeat the key for more channels.
 freeze = 111111111111111111
 
@@ -405,8 +412,8 @@ window_days = 30
 gossip_refresh_hours = 24
 ```
 
-Keys carry their units, and values are validated at start. Budgets and loss
-ceilings (`[limits]`), the rebalancing engine's mode and the notifier
+Keys carry their units, and values are validated at start. The operating and
+exploration budgets, monthly loss ceilings and the notifier
 (`[notify.telegram]`, a separate process with an allowlist of chat ids) arrive
 with the engines that use them. The acting macaroon arrives with the first
 engine that writes, never the admin macaroon.

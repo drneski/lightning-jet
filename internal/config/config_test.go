@@ -100,8 +100,20 @@ func TestTheExampleConfigParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("contrib/jet.conf.example: %v", err)
 	}
-	if c.Macaroon == "" || c.TLSCert == "" || c.Interval != time.Hour || c.GossipRefreshHours != 24 {
+	if c.Macaroon == "" || c.TLSCert == "" || c.Interval != time.Hour || c.GossipRefreshHours != 24 ||
+		c.RebalanceMode != contracts.ModeShadow || c.Limits.RebalancePPMMax != 1000 || c.Limits.RebalanceSatsPerDay != 1000 ||
+		c.Limits.RebalanceCooldownHours != 12 {
 		t.Errorf("example config = %+v", c)
+	}
+}
+
+func TestRebalanceModeMustBeShadowOrOff(t *testing.T) {
+	for mode, ok := range map[contracts.Mode]bool{contracts.ModeShadow: true, contracts.ModeOff: true, contracts.ModeLive: false, "sometimes": false} {
+		c := Default()
+		c.RebalanceMode = mode
+		if err := c.Validate(); (err == nil) != ok {
+			t.Errorf("rebalance mode %q: err = %v", mode, err)
+		}
 	}
 }
 

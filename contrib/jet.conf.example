@@ -25,6 +25,10 @@ interval = 1h
 # shadow: decide and record, never change anything. off: don't evaluate.
 mode = shadow
 
+[rebalance]
+# Refills. shadow: decide and record, never pay anything. off: don't evaluate.
+mode = shadow
+
 [limits]
 # Bounds every proposed fee must stay inside.
 fee_ppm_min = 1
@@ -34,7 +38,14 @@ max_step_pct = 15
 # Hours after an approved change before the same channel may change again.
 cooldown_hours = 12
 max_fee_changes_per_day = 2
-# Channels Jet must never change, one per line.
+# The most a refill may pay, in ppm of what it moves.
+rebalance_ppm_max = 1000
+# The most the refills approved in any 24 hours may pay between them, each
+# counted at its maximum fee.
+rebalance_sats_per_day = 1000
+# Hours after an approved refill before the same channel may be refilled again.
+rebalance_cooldown_hours = 12
+# Channels Jet must never change or refill, one per line.
 # freeze = 111111111111111111
 
 [observe]
