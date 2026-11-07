@@ -45,6 +45,9 @@ var _ Reader = (*Client)(nil)
 const (
 	maxResponseBytes = 64 << 20
 	forwardsPageSize = 10000
+	// paymentsPageSize keeps a page well inside maxResponseBytes: a payment
+	// with many attempts runs to tens of kilobytes.
+	paymentsPageSize = 500
 )
 
 // NewClient returns a client for cfg. It reads the certificate and macaroon
@@ -308,6 +311,64 @@ func (c *Client) ForwardingHistory(ctx context.Context, start, end time.Time) ([
 			return nil, fmt.Errorf("lnd /v1/switch: paging did not advance past offset %d", offset)
 		}
 		offset = r.LastOffsetIndex
+	}
+}
+
+// Payments implements Reader.
+func (c *Client) Payments(ctx context.Context, since time.Time) ([]Payment, error) {
+	var out []Payment
+	var offset uint64
+	for {
+		path := fmt.Sprintf("/v1/payments?include_incomplete=true&creation_date_start=%d&index_offset=%d&max_payments=%d",
+			since.Unix(), offset, paymentsPageSize)
+		var r struct {
+			Payments []struct {
+				Status         string  `json:"status"`
+				CreationTimeNs wireInt `json:"creation_time_ns"`
+				Htlcs          []struct {
+					Status        string  `json:"status"`
+					AttemptTimeNs wireInt `json:"attempt_time_ns"`
+					Route         struct {
+						TotalAmtMsat  wireInt `json:"total_amt_msat"`
+						TotalFeesMsat wireInt `json:"total_fees_msat"`
+						Hops          []struct {
+							ChanID wireUint `json:"chan_id"`
+							PubKey string   `json:"pub_key"`
+						} `json:"hops"`
+					} `json:"route"`
+					Failure *struct {
+						Code               string `json:"code"`
+						FailureSourceIndex int    `json:"failure_source_index"`
+					} `json:"failure"`
+				} `json:"htlcs"`
+			} `json:"payments"`
+			LastIndexOffset wireUint `json:"last_index_offset"`
+		}
+		if err := c.do(ctx, http.MethodGet, path, nil, &r); err != nil {
+			return nil, err
+		}
+		for _, p := range r.Payments {
+			pay := Payment{CreatedAt: time.Unix(0, int64(p.CreationTimeNs)).UTC(), Status: p.Status}
+			for _, h := range p.Htlcs {
+				a := Attempt{At: time.Unix(0, int64(h.AttemptTimeNs)).UTC(), Status: h.Status,
+					TotalAmtMsat: int64(h.Route.TotalAmtMsat), TotalFeesMsat: int64(h.Route.TotalFeesMsat)}
+				for _, hop := range h.Route.Hops {
+					a.Hops = append(a.Hops, Hop{ChanID: contracts.ChanID(hop.ChanID), PubKey: hop.PubKey})
+				}
+				if f := h.Failure; f != nil {
+					a.FailureCode, a.FailureSourceIndex = f.Code, f.FailureSourceIndex
+				}
+				pay.Attempts = append(pay.Attempts, a)
+			}
+			out = append(out, pay)
+		}
+		if len(r.Payments) < paymentsPageSize {
+			return out, nil
+		}
+		if uint64(r.LastIndexOffset) <= offset {
+			return nil, fmt.Errorf("lnd /v1/payments: paging did not advance past offset %d", offset)
+		}
+		offset = uint64(r.LastIndexOffset)
 	}
 }
 

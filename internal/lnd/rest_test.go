@@ -146,6 +146,45 @@ func TestForwardingHistoryPages(t *testing.T) {
 	}
 }
 
+func TestPaymentsPages(t *testing.T) {
+	since := time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
+	var offsets []string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.URL.Path != "/v1/payments" || q.Get("include_incomplete") != "true" || q.Get("creation_date_start") != fmt.Sprint(since.Unix()) {
+			http.NotFound(w, r)
+			return
+		}
+		offsets = append(offsets, q.Get("index_offset"))
+		n := paymentsPageSize // a full first page forces a second request
+		if q.Get("index_offset") != "0" {
+			n = 1
+		}
+		payment := `{"status":"FAILED","creation_time_ns":"%d","htlcs":[{"status":"FAILED","attempt_time_ns":"%d",` +
+			`"route":{"total_amt_msat":"1001000","total_fees_msat":"1000","hops":[{"chan_id":"111","pub_key":"03bb"},{"chan_id":"222","pub_key":"02aa"}]},` +
+			`"failure":{"code":"TEMPORARY_CHANNEL_FAILURE","failure_source_index":1}}]}`
+		ps := make([]string, n)
+		for i := range ps {
+			ts := since.Add(time.Hour).UnixNano()
+			ps[i] = fmt.Sprintf(payment, ts, ts+1000)
+		}
+		fmt.Fprintf(w, `{"payments":[%s],"last_index_offset":"%d"}`, strings.Join(ps, ","), len(offsets)*paymentsPageSize)
+	})
+	pays, err := c.Payments(context.Background(), since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pays) != paymentsPageSize+1 || len(offsets) != 2 || offsets[1] != fmt.Sprint(paymentsPageSize) {
+		t.Fatalf("got %d payments, offsets %v", len(pays), offsets)
+	}
+	a := pays[0].Attempts[0]
+	if pays[0].Status != "FAILED" || a.TotalAmtMsat != 1_001_000 || a.TotalFeesMsat != 1000 || len(a.Hops) != 2 || a.Hops[1].ChanID != 222 ||
+		a.Hops[1].PubKey != "02aa" || a.FailureCode != "TEMPORARY_CHANNEL_FAILURE" || a.FailureSourceIndex != 1 ||
+		!a.At.Equal(since.Add(time.Hour+time.Microsecond)) {
+		t.Errorf("first attempt = %+v", a)
+	}
+}
+
 func TestErrorsCarryLNDsMessage(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

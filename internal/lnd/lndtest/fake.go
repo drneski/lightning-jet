@@ -22,6 +22,7 @@ type Fake struct {
 	Edges         map[contracts.ChanID]lnd.Edge
 	Forwards      []lnd.Forward
 	Nodes         map[string]lnd.GraphNode
+	SentPayments  []lnd.Payment
 	HtlcEvents    []lnd.HtlcEvent
 	ChannelEvents []lnd.ChannelEvent
 	StreamEnd     error
@@ -90,6 +91,20 @@ func (f *Fake) GraphNode(ctx context.Context, pubkey string) (lnd.GraphNode, err
 	n := f.Nodes[pubkey]
 	n.Channels = append([]lnd.Edge(nil), n.Channels...)
 	return n, ctx.Err()
+}
+
+// Payments implements lnd.Reader.
+func (f *Fake) Payments(ctx context.Context, since time.Time) ([]lnd.Payment, error) {
+	if err := f.fail("Payments"); err != nil {
+		return nil, err
+	}
+	var out []lnd.Payment
+	for _, p := range f.SentPayments {
+		if !p.CreatedAt.Before(since) {
+			out = append(out, p)
+		}
+	}
+	return out, ctx.Err()
 }
 
 // SubscribeHtlcEvents implements lnd.Streamer.

@@ -77,6 +77,35 @@ type Reader interface {
 	// GraphNode returns a node's alias and public channels as the graph knows
 	// them.
 	GraphNode(ctx context.Context, pubkey string) (GraphNode, error)
+	// Payments returns the payments we sent since a time, including those
+	// that failed or are still in flight, with every attempt, across as many
+	// pages as LND needs.
+	Payments(ctx context.Context, since time.Time) ([]Payment, error)
+}
+
+// Payment is one payment we sent, with each attempt LND made to deliver it.
+type Payment struct {
+	CreatedAt time.Time
+	Status    string // SUCCEEDED, FAILED or IN_FLIGHT
+	Attempts  []Attempt
+}
+
+// Attempt is one route LND tried for a payment. FailureSourceIndex is the
+// position on the route of the node that reported the failure, 0 being us.
+type Attempt struct {
+	At                 time.Time
+	Status             string // SUCCEEDED, FAILED or IN_FLIGHT
+	TotalAmtMsat       int64
+	TotalFeesMsat      int64
+	Hops               []Hop
+	FailureCode        string
+	FailureSourceIndex int
+}
+
+// Hop is one channel of a route and the node at its far end.
+type Hop struct {
+	ChanID contracts.ChanID
+	PubKey string
 }
 
 // GraphNode is a node as gossip describes it. The alias is whatever the node
