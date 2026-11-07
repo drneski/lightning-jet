@@ -1,10 +1,10 @@
 // Package refill is Jet's first refill strategy, refill.value. For a depleted
 // channel with enough traffic to value, it sizes a refill to the demand it
 // expects, picks a source with liquidity to spare and little demand of its
-// own, and proposes the refill only when what it would earn, at the low end of
-// the forecast, is more than it would cost. Otherwise it abstains, and says at
-// what fee or what cost a refill would pay. It proposes and never decides:
-// authorization does that.
+// own, and proposes the refill only when what it would earn at the current
+// fee, at the low end of the forecast's range, is more than it would cost.
+// Otherwise it abstains, and says at what fee or what cost a refill would
+// pay. It proposes and never decides: authorization does that.
 package refill
 
 import (
@@ -20,7 +20,7 @@ import (
 // The strategy's identity, recorded on everything it proposes.
 const (
 	StrategyName    = "refill.value"
-	StrategyVersion = "0.1.0"
+	StrategyVersion = "0.2.0"
 )
 
 // Config is the strategy's settings.
@@ -174,12 +174,19 @@ func (s *Strategy) Evaluate(snap *contracts.Snapshot, target Channel, all []Chan
 		costPPM, how = *rc.ExpectedPPM, "its expected replacement cost, through the cheapest way in"
 	}
 
-	// Value: the forecast's share for the amount, at its low end and expected.
+	// Value: the amount routed out at our current fee. The forecast's fees are
+	// whatever the window's fees were, which a fee change since leaves behind;
+	// its range, from the count of forwards, says how sure the volume is, so
+	// the low end keeps the same share of the expected value.
 	cost := contracts.MilliSat(int64(amount) * costPPM / 1_000_000)
-	low := contracts.MilliSat(int64(*rev.LowMsat) * int64(amount) / int64(demand))
-	expected := contracts.MilliSat(int64(*rev.ExpectedMsat) * int64(amount) / int64(demand))
 	fee := obs.OurPolicy.FeePPM
-	what := fmt.Sprintf("a refill of %s sats from %s would cost about %s sats (%d ppm, %s) and earn %s to %s sats over %d days at %d ppm",
+	expected := contracts.MilliSat(int64(amount) * fee / 1_000_000)
+	var low contracts.MilliSat
+	if *rev.ExpectedMsat > 0 {
+		low = contracts.MilliSat(int64(expected) * int64(*rev.LowMsat) / int64(*rev.ExpectedMsat))
+	}
+	what := fmt.Sprintf("a refill of %s sats from %s would cost about %s sats (%d ppm, %s) and earn %s to %s sats over %d days at %d ppm, "+
+		"if forwards out keep their volume at that fee",
 		sats(amount), source.Obs.ChanID.SCID(), sats(cost), costPPM, how, sats(low), sats(expected), days, fee)
 	if low <= cost {
 		wouldChange := []string{}

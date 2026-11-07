@@ -86,6 +86,20 @@ func TestARefillThatPaysIsProposed(t *testing.T) {
 	}
 }
 
+// A refill is valued at the current fee, not the fees of the window. Here
+// the forwards were at 300 ppm, earning 300 to 420 sats, and the fee is now
+// 1,000: the same volume earns 1,000 to 1,400, more than the 707 it costs.
+func TestARefillIsValuedAtTheCurrentFee(t *testing.T) {
+	target, all := node(1000, 300_000, 420_000)
+	intent, abst := strategy().Evaluate(snap, target, all)
+	if intent == nil {
+		t.Fatalf("abstained: %+v", abst)
+	}
+	if *intent.Limits.MaxFeeMsat != 1_000_000 || !strings.Contains(intent.Rationale.Summary, "earn 1,000 to 1,400 sats over 14 days at 1000 ppm, if forwards out keep their volume") {
+		t.Errorf("intent = %+v", intent)
+	}
+}
+
 // Without the neighbor, the source is the channel with the most to spare,
 // priced at the high end of the replacement cost: 1.4M sats at 900 ppm is
 // 1,260 sats, more than the 1,000 earned at the low end.

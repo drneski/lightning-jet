@@ -28,8 +28,8 @@ The architecture is settled; see
 - **Refills, in shadow.** Jet estimates what refilling each channel costs. For
   each depleted channel with enough traffic, it sizes a refill to the demand
   the channel shows, picks a source with liquidity to spare, and proposes the
-  refill only when it earns more than it costs at the low end of the
-  forecast. The limits authorize it, and nothing is paid.
+  refill only when, at the current fee, it earns more than it costs at the
+  low end of the forecast. The limits authorize it, and nothing is paid.
 
 The records and rules it follows are in
 [`docs/architecture/decision-contracts.md`](docs/architecture/decision-contracts.md).
