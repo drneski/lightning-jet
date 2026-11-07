@@ -169,3 +169,71 @@ func TestReplacementCost(t *testing.T) {
 		}
 	}
 }
+
+// attempt is a refill attempt of 1M sats at a ppm.
+func attempt(ppm int64, result contracts.AttemptResult) contracts.RefillAttempt {
+	return contracts.RefillAttempt{AmountMsat: 1_000_000_000, FeeMsat: contracts.MilliSat(ppm * 1000), Result: result}
+}
+
+// Refills that succeeded are the estimate: their median and range, whatever
+// the advertised fees say.
+func TestMeasuredRefillsAreTheReplacementCost(t *testing.T) {
+	ch := channel(12, 6_000_000)
+	ch.PeerPolicy = &contracts.Policy{FeePPM: 600}
+	ch.Competition = &contracts.Competition{Channels: 120, FeePPMP25: 80, FeePPMMedian: 400, FeePPMP75: 1200}
+	ch.Refills = &contracts.Refills{WindowHours: 720, Attempts: []contracts.RefillAttempt{
+		attempt(900, contracts.AttemptSucceeded), attempt(700, contracts.AttemptSucceeded), attempt(1300, contracts.AttemptSucceeded),
+		attempt(650, contracts.AttemptNoLiquidity),
+	}}
+	est := estimator().ReplacementCost(snapshot(), ch)
+	if err := est.Validate(); err != nil {
+		t.Fatalf("estimate does not validate: %v", err)
+	}
+	if *est.LowPPM != 700 || *est.ExpectedPPM != 900 || *est.HighPPM != 1300 || est.Interval != IntervalMeasured ||
+		est.EconomicConfidence.Level != contracts.ConfidenceMedium || est.EconomicConfidence.Basis != "3 refills into the channel in 30 days, median 900 ppm" {
+		t.Errorf("estimate = %d / %d / %d, %s, %+v", *est.LowPPM, *est.ExpectedPPM, *est.HighPPM, est.Interval, est.EconomicConfidence)
+	}
+	if last := est.Evidence[len(est.Evidence)-1]; last.Kind != "refills_succeeded" || last.Prior || last.Count != 3 ||
+		last.Summary != "3 refills into the channel succeeded, at 700 to 1300 ppm" {
+		t.Errorf("evidence = %+v", last)
+	}
+}
+
+// Failed attempts correct the prior: a route that reached us sets the
+// expected cost, and without one, the costliest route that ran dry raises it.
+func TestRefillAttemptsCorrectThePrior(t *testing.T) {
+	ch := channel(12, 6_000_000)
+	ch.PeerPolicy = &contracts.Policy{FeePPM: 600}
+	ch.Competition = &contracts.Competition{Channels: 120, FeePPMP25: 80, FeePPMMedian: 400, FeePPMP75: 1200} // 600 / 680 / 1000
+	for name, tc := range map[string]struct {
+		attempts       []contracts.RefillAttempt
+		expected, high int64
+		interval       string
+	}{
+		"none":              {nil, 680, 1000, IntervalAdvertised},
+		"dry below":         {[]contracts.RefillAttempt{attempt(650, contracts.AttemptNoLiquidity)}, 680, 1000, IntervalAttempts},
+		"dry above":         {[]contracts.RefillAttempt{attempt(1500, contracts.AttemptNoLiquidity), attempt(900, contracts.AttemptNoLiquidity)}, 1500, 1500, IntervalAttempts},
+		"reached":           {[]contracts.RefillAttempt{attempt(1800, contracts.AttemptReached), attempt(1700, contracts.AttemptReached)}, 1700, 1700, IntervalAttempts},
+		"reached beats dry": {[]contracts.RefillAttempt{attempt(900, contracts.AttemptReached), attempt(1500, contracts.AttemptNoLiquidity)}, 900, 1000, IntervalAttempts},
+		"other failures":    {[]contracts.RefillAttempt{attempt(5000, contracts.AttemptFailed)}, 680, 1000, IntervalAdvertised},
+	} {
+		c := ch
+		c.Refills = &contracts.Refills{WindowHours: 720, Attempts: tc.attempts}
+		est := estimator().ReplacementCost(snapshot(), c)
+		if err := est.Validate(); err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if *est.LowPPM != 600 || *est.ExpectedPPM != tc.expected || *est.HighPPM != tc.high || est.Interval != tc.interval ||
+			est.EconomicConfidence.Level != contracts.ConfidenceLow {
+			t.Errorf("%s: %d / %d / %d, %s, %+v", name, *est.LowPPM, *est.ExpectedPPM, *est.HighPPM, est.Interval, est.EconomicConfidence)
+		}
+	}
+	// A route that reached us is a way in even when the graph shows none.
+	c := ch
+	c.Competition = nil
+	c.Refills = &contracts.Refills{WindowHours: 720, Attempts: []contracts.RefillAttempt{attempt(1700, contracts.AttemptReached)}}
+	if est := estimator().ReplacementCost(snapshot(), c); est.ExpectedPPM == nil || *est.ExpectedPPM != 1700 || *est.HighPPM != 1700 {
+		t.Errorf("without the graph: %+v", est.EconomicConfidence)
+	}
+}
