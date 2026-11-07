@@ -25,6 +25,11 @@ The architecture is settled; see
   happen, including the forwards that failed for lack of balance, with any
   gaps in the record known. It reads competitors' advertised fees from the
   graph as a prior. It runs unattended under a hardened systemd unit.
+- **Refills, in shadow.** Jet estimates what refilling each channel costs. For
+  each depleted channel with enough traffic, it sizes a refill to the demand
+  the channel shows, picks a source with liquidity to spare, and proposes the
+  refill only when it earns more than it costs at the low end of the
+  forecast. The limits authorize it, and nothing is paid.
 
 The records and rules it follows are in
 [`docs/architecture/decision-contracts.md`](docs/architecture/decision-contracts.md).
@@ -57,8 +62,9 @@ Then:
 - `jet report` shows each channel's economics, by peer name: the sats routed
   out and in, fees earned and their yield on capacity, forwards that failed for
   lack of balance, the forecast, what competing channels charge, what a refill
-  would cost, and the latest decision. Then the routes through the node that earned the most, and the
-  channels whose depleted side limits them.
+  would cost, and the latest decision. Then the routes through the node that
+  earned the most, the latest refill decisions, and the channels whose depleted
+  side limits them.
   `--raw` prints every exact value as tab-separated rows, and `--json` the
   whole report;
 - `jet health` checks that cycles and both streams are current, and exits 1 if
