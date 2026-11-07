@@ -32,8 +32,8 @@ func sampleCycle(t *testing.T, suffix string, at time.Time, mode contracts.Mode)
 	t.Helper()
 	snap := &contracts.Snapshot{ID: "s" + suffix, Schema: contracts.SchemaSnapshot, NodePubkey: "02aa", BlockHeight: 900000, TakenAt: at,
 		Channels: []contracts.ChannelObservation{
-			{ChanID: 1, CapacityMsat: 5_000_000_000, LocalMsat: 4_600_000_000, DataQuality: contracts.DataQuality{Level: contracts.DataGood}},
-			{ChanID: 2, CapacityMsat: 2_000_000_000, LocalMsat: 1_000_000_000, DataQuality: contracts.DataQuality{Level: contracts.DataGood}},
+			{ChanID: 1, Peer: "03p1", CapacityMsat: 5_000_000_000, LocalMsat: 4_600_000_000, DataQuality: contracts.DataQuality{Level: contracts.DataGood}},
+			{ChanID: 2, Peer: "03p2", CapacityMsat: 2_000_000_000, LocalMsat: 1_000_000_000, DataQuality: contracts.DataQuality{Level: contracts.DataGood}},
 		}}
 	if err := snap.Seal(); err != nil {
 		t.Fatal(err)
@@ -329,5 +329,32 @@ func TestRefillEvaluation(t *testing.T) {
 	}
 	if _, err := s.RefillEvaluation(ctx, 1, "elsewhen"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("another cycle: err = %v, want ErrNotFound", err)
+	}
+}
+
+// A peer's channels are one entry in the status, under the first of them,
+// with their balances together.
+func TestLatestStatusGroupsAPeersChannels(t *testing.T) {
+	s, _ := openTemp(t)
+	ctx := context.Background()
+	c := sampleCycle(t, "1", time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), contracts.ModeShadow)
+	c.Snapshot.Channels[1].Peer = c.Snapshot.Channels[0].Peer
+	if err := c.Snapshot.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	c.Abstentions, c.Estimates = nil, c.Estimates[:1]
+	if err := s.SaveCycle(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.LatestStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.PerChannel) != 1 || st.Channels != 2 {
+		t.Fatalf("status = %+v", st)
+	}
+	p := st.PerChannel[0]
+	if p.ChanID != 1 || len(p.ChanIDs) != 2 || p.LocalMsat != 5_600_000_000 || p.CapacityMsat != 7_000_000_000 || p.Proposal == nil {
+		t.Errorf("entry = %+v", p)
 	}
 }

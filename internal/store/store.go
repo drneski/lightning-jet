@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/drneski/lightning-jet/v2/internal/contracts"
+	"github.com/drneski/lightning-jet/v2/internal/peer"
 
 	_ "modernc.org/sqlite" // the pure-Go SQLite driver, registered as "sqlite"
 )
@@ -486,7 +487,8 @@ type Status struct {
 	Abstentions map[contracts.AbstentionReason]int
 	Approved    int
 	Rejected    int
-	// PerChannel is each channel's result in that cycle, in channel order.
+	// PerChannel is each peer's result in that cycle, in channel order: a
+	// peer's channels are decided together, under the first of them.
 	PerChannel []ChannelStatus
 	// Refills are the cycle's refill evaluations, in channel order.
 	Refills []RefillStatus
@@ -502,9 +504,11 @@ type RefillStatus struct {
 }
 
 // ChannelStatus is one channel's result in a cycle: an abstention's reason,
-// or a proposal and its verdict.
+// or a proposal and its verdict. When the peer has several channels, ChanIDs
+// lists them, ChanID first, and the balances are theirs together.
 type ChannelStatus struct {
 	ChanID       contracts.ChanID
+	ChanIDs      []contracts.ChanID
 	LocalMsat    contracts.MilliSat
 	CapacityMsat contracts.MilliSat
 	Abstained    contracts.AbstentionReason
@@ -559,9 +563,14 @@ func (s *Store) Estimates(ctx context.Context, snapshotID string) ([]*contracts.
 	return out, rows.Err()
 }
 
+// LatestSnapshot returns the most recent recorded cycle's snapshot.
+func (s *Store) LatestSnapshot(ctx context.Context) (*contracts.Snapshot, error) {
+	return getRecord[contracts.Snapshot](ctx, s.db, `SELECT record FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT ?`, 1)
+}
+
 // LatestStatus returns a summary of the most recent recorded cycle.
 func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
-	snap, err := getRecord[contracts.Snapshot](ctx, s.db, `SELECT record FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT ?`, 1)
+	snap, err := s.LatestSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -590,8 +599,9 @@ func (s *Store) LatestStatus(ctx context.Context) (*Status, error) {
 	}
 
 	results := map[contracts.ChanID]*ChannelStatus{}
-	for _, c := range snap.Channels {
-		cs := &ChannelStatus{ChanID: c.ChanID, LocalMsat: c.LocalMsat, CapacityMsat: c.CapacityMsat}
+	for _, g := range peer.Groups(snap.Channels) {
+		c := g.Combined
+		cs := &ChannelStatus{ChanID: c.ChanID, ChanIDs: g.IDs(), LocalMsat: c.LocalMsat, CapacityMsat: c.CapacityMsat}
 		results[c.ChanID] = cs
 		st.PerChannel = append(st.PerChannel, *cs)
 	}
