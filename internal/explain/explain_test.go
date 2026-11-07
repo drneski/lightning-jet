@@ -80,12 +80,17 @@ func TestIntentText(t *testing.T) {
 			{Rule: "mode", Passed: true, Detail: "the fees engine is shadow"},
 			{Rule: "cooldown", Passed: false, Detail: "a change was approved 1h0m0s ago; the cooldown is 12 hours"}}},
 		Outcomes: []*contracts.Outcome{{State: contracts.NotExecuted, Detail: "rejected: cooldown"}}}
+	low, exp, high := int64(600), int64(605), int64(1000)
+	ev.Estimates = append(ev.Estimates, &contracts.Estimate{Kind: "replacement_cost", HorizonHours: 336, Interval: "advertised fees",
+		LowPPM: &low, ExpectedPPM: &exp, HighPPM: &high, EconomicConfidence: contracts.EconomicConfidence{Level: contracts.ConfidenceLow,
+			Basis: "advertised fees only"}})
 	x, err := Build(ev)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := x.Text()
 	for _, want := range []string{
+		"            Replacement cost, 14 days: 605 ppm expected, 600 to 1,000 (advertised fees).",
 		"Proposed    Change the fee from 500 to 450 ppm, base 0 msat unchanged, by 2026-10-27 00:00 UTC.",
 		"Decided     Rejected in shadow mode: 1 of 2 rules passed.",
 		"FAIL  cooldown: a change was approved 1h0m0s ago",
@@ -146,6 +151,9 @@ func TestFailuresAndPriorsAreShown(t *testing.T) {
 	ev.Estimates[0].Evidence = []contracts.Evidence{
 		{Kind: "competing_fees", Prior: true, Count: 40, Summary: "40 other channels into the peer advertise 150-600 ppm (median 300)"},
 	}
+	// A second estimate resting on the same prior doesn't repeat it.
+	second := *ev.Estimates[0]
+	ev.Estimates = append(ev.Estimates, &second)
 	x, err := Build(ev)
 	if err != nil {
 		t.Fatal(err)
@@ -161,5 +169,8 @@ func TestFailuresAndPriorsAreShown(t *testing.T) {
 	}
 	if x.Observed.Failures == nil {
 		t.Error("the JSON form has no failures")
+	}
+	if n := strings.Count(text, "Prior: 40 other channels"); n != 1 {
+		t.Errorf("the shared prior is shown %d times", n)
 	}
 }

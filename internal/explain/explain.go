@@ -124,6 +124,7 @@ func (x *Explanation) Text() string {
 	}
 	more("Data quality: %s.", quality(o.DataQuality))
 
+	shown := map[string]bool{} // a prior two estimates share is shown once
 	for i, e := range x.Estimated {
 		label := ""
 		if i == 0 {
@@ -131,15 +132,20 @@ func (x *Explanation) Text() string {
 		}
 		name := strings.ReplaceAll(e.Kind, "_", " ")
 		name = strings.ToUpper(name[:1]) + name[1:]
-		if e.ExpectedMsat == nil {
+		switch {
+		case e.ExpectedPPM != nil && e.LowPPM != nil && e.HighPPM != nil:
+			line(label, "%s, %d days: %s ppm expected, %s to %s (%s).", name, e.HorizonHours/24,
+				commas(*e.ExpectedPPM), commas(*e.LowPPM), commas(*e.HighPPM), e.Interval)
+		case e.ExpectedMsat == nil:
 			line(label, "%s, %d days: no forecast.", name, e.HorizonHours/24)
-		} else {
+		default:
 			line(label, "%s, %d days: %s sats expected, %s to %s (%s).", name, e.HorizonHours/24,
 				commas(e.ExpectedMsat.Sats()), commas(e.LowMsat.Sats()), commas(e.HighMsat.Sats()), e.Interval)
 		}
 		more("Economic confidence: %s (%s).", e.EconomicConfidence.Level, e.EconomicConfidence.Basis)
 		for _, ev := range e.Evidence {
-			if ev.Prior {
+			if ev.Prior && !shown[ev.Summary] {
+				shown[ev.Summary] = true
 				more("Prior: %s (a prior, not a price).", ev.Summary)
 			}
 		}
